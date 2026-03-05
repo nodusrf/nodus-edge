@@ -1,0 +1,40 @@
+services:
+  recept-fm:
+    image: registry.nodusrf.com/nodus-edge-fm:${RECEPT_FM_TAG:-latest}
+    privileged: true                     # Required for RTL-SDR USB access
+    devices:
+      - /dev/bus/usb:/dev/bus/usb       # RTL-SDR passthrough
+    env_file: .env
+    ports:
+      - "8073:8073"                     # Edge dashboard
+    volumes:
+      - ./data:/data                    # audio capture + JSON output
+      - ./repeaters.json:/app/recept/data/repeaters.json:ro
+      - ./.env:/app/.env                # dashboard settings editor
+    depends_on:
+      whisper:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  whisper:
+    image: ghcr.io/nodusrf/nodus-whisper-cpu:${WHISPER_CPU_TAG:-latest}
+    environment:
+      - WHISPER_MODEL=${WHISPER_MODEL:-base}
+      - WHISPER_DEVICE=cpu
+      - WHISPER_COMPUTE_TYPE=int8
+    volumes:
+      - whisper-models:/opt/whisper/models   # persist downloaded model
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  whisper-models:
