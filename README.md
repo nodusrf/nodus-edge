@@ -13,7 +13,7 @@ Run your own Nodus FM monitoring station with an RTL-SDR dongle and Docker.
 ## Quick Start (One-Liner)
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge-fm/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh)"
 ```
 
 You'll need a **NodusNet account** — [sign up at nodusrf.com/edge](https://nodusrf.com/edge) to get your credentials. The installer will prompt you to sign in before downloading anything.
@@ -24,8 +24,8 @@ If you prefer to set up manually:
 
 ```bash
 # 1. Clone this repo
-git clone https://github.com/nodusrf/nodus-edge-fm.git
-cd nodus-edge-fm
+git clone https://github.com/nodusrf/nodus-edge.git
+cd nodus-edge
 
 # 2. Sign in with your NodusNet credentials
 docker login registry.nodusrf.com
