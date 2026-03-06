@@ -2,7 +2,7 @@
 # NodusNet FM Edge Node — One-Command Installer
 #
 # Install from anywhere:
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge-fm/main/install.sh)"
+#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh)"
 #
 # Or from the repo:
 #   ./install.sh
@@ -12,8 +12,6 @@
 #
 # Prerequisites: Linux (x86_64 or arm64), internet access, RTL-SDR dongle
 # Installs to: ~/nodusnet/
-#
-# Fixes #3
 
 set -euo pipefail
 
@@ -22,7 +20,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 INSTALL_DIR="$HOME/nodusnet"
-GITHUB_RAW="https://raw.githubusercontent.com/nodusrf/nodus-edge-fm/main"
+GITHUB_RAW="https://raw.githubusercontent.com/nodusrf/nodus-edge/main"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -60,7 +58,7 @@ resolve_file() {
     local dest="$2"
     local desc="$3"
 
-    # Check if we're inside the nodus-edge-fm repo
+    # Check if we're inside the nodus-edge repo
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null || echo ".")" && pwd 2>/dev/null || echo "")"
     local local_file="$script_dir/$repo_path"
@@ -93,7 +91,7 @@ echo "    5. Deploy containers to ~/nodusnet/"
 echo ""
 echo -e "  ${DIM}Don't have an account? Sign up at https://nodusrf.com/edge${NC}"
 echo ""
-echo -e "  ${DIM}https://github.com/nodusrf/nodus-edge-fm${NC}"
+echo -e "  ${DIM}https://github.com/nodusrf/nodus-edge${NC}"
 echo ""
 
 if $DRY_RUN; then
@@ -135,6 +133,16 @@ if ! command -v python3 &>/dev/null; then
     fi
 fi
 info "Python: $(python3 --version 2>&1)"
+
+# Detect Raspberry Pi (aarch64 + Pi hardware)
+IS_PI=false
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "armv7l" ]; then
+    if grep -qi "raspberry\|BCM2" /proc/cpuinfo 2>/dev/null || \
+       grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+        IS_PI=true
+        info "Raspberry Pi detected — will use remote Whisper (no local container)"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Docker Engine
@@ -307,6 +315,7 @@ run mkdir -p "$INSTALL_DIR/data"
 COMPOSE_DST="$INSTALL_DIR/docker-compose.yml"
 WIZARD_PATH="$INSTALL_DIR/.setup-wizard.py"
 ZIPMETA_PATH="$INSTALL_DIR/.zip_metro.json"
+REPEATERS_2M_PATH="$INSTALL_DIR/.repeaters_2m_us.json"
 
 if $DRY_RUN; then
     info "[dry-run] Would download/copy files to $INSTALL_DIR/"
@@ -314,11 +323,19 @@ else
     # docker-compose.yml (public repo already has no build: context)
     resolve_file "docker-compose.yml" "$COMPOSE_DST" "docker-compose.yml"
 
+    # On Pi, remove depends_on whisper (whisper container won't run)
+    if $IS_PI; then
+        sed -i '/depends_on:/,/condition:/d' "$COMPOSE_DST"
+    fi
+
     # Setup wizard
     resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
 
     # CBSA zip-to-metro mapping
     resolve_file "data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
+
+    # Offline 2m repeater bundle
+    resolve_file "data/repeaters_2m_us.json" "$REPEATERS_2M_PATH" "2m repeater database (offline)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -336,8 +353,9 @@ if $DRY_RUN; then
     WIZARD_ARGS+=(--dry-run)
 fi
 
-# Point the wizard at the downloaded zip_metro.json
+# Point the wizard at downloaded data files
 export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
+export NODUSNET_REPEATERS_2M_PATH="$REPEATERS_2M_PATH"
 
 python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
 
@@ -358,15 +376,26 @@ rm -f "$WIZARD_PATH"
 
 step "Step 7: Deploy Containers"
 
+# On Pi, scale whisper to 0 (user must provide a remote GPU endpoint)
+COMPOSE_EXTRA_ARGS=""
+if $IS_PI; then
+    info "Raspberry Pi: skipping local Whisper container (use remote GPU endpoint)"
+    COMPOSE_EXTRA_ARGS="--scale whisper=0"
+fi
+
 if $DRY_RUN; then
     info "[dry-run] docker compose -f $COMPOSE_DST pull"
-    info "[dry-run] docker compose -f $COMPOSE_DST up -d"
+    info "[dry-run] docker compose -f $COMPOSE_DST up -d $COMPOSE_EXTRA_ARGS"
 else
     info "Pulling container images (this may take a few minutes on first run)..."
-    docker compose -f "$COMPOSE_DST" pull
+    if $IS_PI; then
+        docker compose -f "$COMPOSE_DST" pull recept-fm support-sidecar
+    else
+        docker compose -f "$COMPOSE_DST" pull
+    fi
 
     info "Starting containers..."
-    docker compose -f "$COMPOSE_DST" up -d
+    docker compose -f "$COMPOSE_DST" up -d $COMPOSE_EXTRA_ARGS
 fi
 
 # ---------------------------------------------------------------------------
@@ -472,7 +501,10 @@ fi
 step "Step 10: Health Check"
 
 if $DRY_RUN; then
-    info "[dry-run] Would wait for Whisper model download + health check"
+    info "[dry-run] Would wait for health check"
+elif $IS_PI; then
+    info "Raspberry Pi: skipping local Whisper health check (using remote endpoint)"
+    echo ""
 else
     info "Waiting for Whisper to download model and become healthy..."
     info "(First run may take 1-3 minutes while the model downloads)"
@@ -507,13 +539,14 @@ else
     fi
 
     echo ""
-    RECEPT_STATE="$(docker compose -f "$COMPOSE_DST" ps recept-fm --format '{{.State}}' 2>/dev/null || echo "")"
-    if [ "$RECEPT_STATE" = "running" ]; then
-        info "Recept FM is running!"
-    else
-        warn "Recept FM state: $RECEPT_STATE"
-        warn "Check logs: docker compose -f $COMPOSE_DST logs recept-fm"
-    fi
+fi
+
+RECEPT_STATE="$(docker compose -f "$COMPOSE_DST" ps recept-fm --format '{{.State}}' 2>/dev/null || echo "")"
+if [ "$RECEPT_STATE" = "running" ]; then
+    info "Recept FM is running!"
+elif ! $DRY_RUN; then
+    warn "Recept FM state: $RECEPT_STATE"
+    warn "Check logs: docker compose -f $COMPOSE_DST logs recept-fm"
 fi
 
 # ---------------------------------------------------------------------------
