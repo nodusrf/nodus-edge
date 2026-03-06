@@ -175,6 +175,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 2b: Clean up existing installation (if any)
+# ---------------------------------------------------------------------------
+
+EXISTING_COMPOSE="$INSTALL_DIR/docker-compose.yml"
+if [ -f "$EXISTING_COMPOSE" ] && command -v docker &>/dev/null; then
+    step "Existing Installation Detected"
+    info "Found existing NodusNet at $INSTALL_DIR/"
+    info "Stopping old containers..."
+    if $DRY_RUN; then
+        info "[dry-run] docker compose -f $EXISTING_COMPOSE down"
+    else
+        docker compose -f "$EXISTING_COMPOSE" down 2>/dev/null || true
+        info "Old containers stopped."
+    fi
+
+    # Back up .env so the wizard can offer to reuse settings
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        if $DRY_RUN; then
+            info "[dry-run] Would back up .env to .env.bak"
+        else
+            cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak"
+            info "Backed up existing .env to .env.bak"
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 3: RTL-SDR USB permissions
 # ---------------------------------------------------------------------------
 
