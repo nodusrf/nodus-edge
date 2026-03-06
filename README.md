@@ -1,4 +1,4 @@
-# Nodus Edge FM
+# Nodus Recept FM — Edge Node
 
 Run your own Nodus FM monitoring station with an RTL-SDR dongle and Docker.
 
@@ -10,67 +10,23 @@ Run your own Nodus FM monitoring station with an RTL-SDR dongle and Docker.
 - **CPU** — any modern x86_64 (Whisper CPU runs on 2+ cores)
 - **RAM** — 2 GB minimum (4 GB recommended)
 
-## Quick Start (One-Liner)
+## Quick Start
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh)"
-```
+# 1. Clone or download the edge directory
+git clone https://github.com/nodusrf/nodus.git
+cd nodus/edge/recept-fm
 
-You'll need a **NodusNet account** — [sign up at nodusrf.com/edge](https://nodusrf.com/edge) to get your credentials. The installer will prompt you to sign in before downloading anything.
+# 2. Configure
+cp .env.example .env
+# Edit .env — set your frequencies, API key, and node ID
 
-### Manual Setup
-
-If you prefer to set up manually:
-
-```bash
-# 1. Clone this repo
-git clone https://github.com/nodusrf/nodus-edge.git
-cd nodus-edge
-
-# 2. Sign in with your NodusNet credentials
-docker login registry.nodusrf.com
-
-# 3. Run the setup wizard (recommended)
-python3 setup.py
-
-# Or configure manually:
-# cp .env.example .env
-# Edit .env — set your frequencies, API key, metro, and node ID
-
-# 4. Start
+# 3. Start
 docker compose up -d
 
-# 5. Check logs
-docker compose logs -f recept-fm
+# 4. Check logs
+docker compose logs -f nodus-edge
 ```
-
-## Setup Wizard
-
-The interactive setup wizard auto-detects your metro area, finds nearby 2m repeaters from RepeaterBook, and generates `.env` and `repeaters.json`. No dependencies beyond Python 3.8+ stdlib.
-
-```bash
-# Interactive mode (recommended for first-time setup)
-python3 setup.py
-
-# Scripted mode (for automation)
-python3 setup.py --zip 85001 --callsign KF0ASB --non-interactive
-
-# Preview without writing files
-python3 setup.py --dry-run
-
-# Custom search radius
-python3 setup.py --radius 75
-```
-
-The wizard will:
-1. Ask for your NodusNet server connection and API key
-2. Resolve your location and metro area from your zip code
-3. Collect your callsign (optional)
-4. Fetch nearby 2m repeaters from RepeaterBook
-5. Detect RTL-SDR devices
-6. Configure RF environment (squelch thresholds)
-7. Configure Whisper transcription
-8. Generate `.env` and `repeaters.json`
 
 ## Configuration
 
@@ -82,14 +38,9 @@ Copy `.env.example` to `.env` and edit:
 | `RECEPT_SYNAPSE_ENDPOINT` | Yes | Central Nodus endpoint (`https://api.nodusalert.ai`) |
 | `RECEPT_SYNAPSE_AUTH_TOKEN` | Yes | API key from your Nodus admin |
 | `RECEPT_NODE_ID` | Yes | Unique name for this node (e.g., `edge-W1ABC`) |
-| `RECEPT_METRO` | Yes | Metro area slug (e.g., `phoenix`, `omaha`) — isolates scenes by metro |
 | `RECEPT_FM_SCANNER_BACKEND` | No | `airband` (default) or `rtl_fm` |
 | `RECEPT_FM_GAIN` | No | RTL-SDR gain, 0–49 (default: 40) |
 | `WHISPER_MODEL` | No | `base` (default), `small`, or `medium` |
-
-### Edge Dashboard
-
-A local web dashboard is included at **http://localhost:8073** — it works fully offline and shows live transcripts, frequency stats, and traffic graphs.
 
 ### Using a Remote GPU Whisper Server
 
@@ -141,13 +92,10 @@ docker compose ps
 docker compose logs whisper | tail -5
 
 # Recept should show scanner startup and frequency list
-docker compose logs recept-fm | tail -20
+docker compose logs nodus-edge | tail -20
 
 # Test Whisper health endpoint
 curl http://localhost:8000/health
-
-# Open the edge dashboard
-open http://localhost:8073
 ```
 
 ## Upgrading
@@ -164,7 +112,3 @@ docker compose up -d
 **Whisper container slow to start** — First run downloads the model (~150 MB for `base`). Subsequent starts use the cached model from the `whisper-models` volume.
 
 **"Cannot reach Synapse"** — Check your `RECEPT_SYNAPSE_ENDPOINT` and `RECEPT_SYNAPSE_AUTH_TOKEN` in `.env`. Verify network access to `api.nodusalert.ai`.
-
-## License
-
-[MIT](LICENSE)

@@ -1,6 +1,6 @@
 services:
-  recept-fm:
-    image: registry.nodusrf.com/nodus-edge-fm:${RECEPT_FM_TAG:-latest}
+  nodus-edge:
+    image: registry.nodusrf.com/nodus-edge:${NODUS_EDGE_TAG:-latest}
     privileged: true                     # Required for RTL-SDR USB access
     devices:
       - /dev/bus/usb:/dev/bus/usb       # RTL-SDR passthrough
@@ -22,7 +22,7 @@ services:
       retries: 3
 
   whisper:
-    image: ghcr.io/nodusrf/nodus-whisper-cpu:${WHISPER_CPU_TAG:-latest}
+    image: registry.nodusrf.com/nodus-whisper-cpu:${WHISPER_CPU_TAG:-latest}
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=cpu
@@ -35,6 +35,19 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+
+  support-sidecar:
+    image: registry.nodusrf.com/nodus-support-sidecar:${SUPPORT_SIDECAR_TAG:-latest}
+    environment:
+      - TUNNEL_TOKEN=${NODUS_TUNNEL_TOKEN}
+      - AUTHORIZED_KEYS=${NODUS_SUPPORT_AUTHORIZED_KEYS:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data:/data:ro
+      - .:/host/nodusnet                   # project dir for docker compose + .env edits
+    profiles:
+      - support
+    restart: "no"
 
 volumes:
   whisper-models:

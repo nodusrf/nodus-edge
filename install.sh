@@ -12,6 +12,8 @@
 #
 # Prerequisites: Linux (x86_64 or arm64), internet access, RTL-SDR dongle
 # Installs to: ~/nodusnet/
+#
+# Refs #203
 
 set -euo pipefail
 
@@ -58,10 +60,11 @@ resolve_file() {
     local dest="$2"
     local desc="$3"
 
-    # Check if we're inside the nodus-edge repo
+    # Check if we're inside the nodus repo
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null || echo ".")" && pwd 2>/dev/null || echo "")"
-    local local_file="$script_dir/$repo_path"
+    local repo_dir="${script_dir%/scripts}"
+    local local_file="$repo_dir/$repo_path"
 
     if [ -f "$local_file" ] 2>/dev/null; then
         cp "$local_file" "$dest"
@@ -85,13 +88,10 @@ echo ""
 echo "  This script will:"
 echo "    1. Install Docker (if needed)"
 echo "    2. Configure USB permissions for RTL-SDR"
-echo "    3. Sign in to your NodusNet account"
-echo "    4. Run the setup wizard (location, callsign, frequencies)"
-echo "    5. Deploy containers to ~/nodusnet/"
+echo "    3. Run the setup wizard (server, location, callsign)"
+echo "    4. Deploy containers to ~/nodusnet/"
 echo ""
-echo -e "  ${DIM}Don't have an account? Sign up at https://nodusrf.com/edge${NC}"
-echo ""
-echo -e "  ${DIM}https://github.com/nodusrf/nodus-edge${NC}"
+echo -e "  ${DIM}https://github.com/nodusrf/nodus${NC}"
 echo ""
 
 if $DRY_RUN; then
@@ -133,16 +133,6 @@ if ! command -v python3 &>/dev/null; then
     fi
 fi
 info "Python: $(python3 --version 2>&1)"
-
-# Detect Raspberry Pi (aarch64 + Pi hardware)
-IS_PI=false
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "armv7l" ]; then
-    if grep -qi "raspberry\|BCM2" /proc/cpuinfo 2>/dev/null || \
-       grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
-        IS_PI=true
-        info "Raspberry Pi detected — will use remote Whisper (no local container)"
-    fi
-fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Docker Engine
@@ -236,79 +226,10 @@ if $UDEV_CHANGED; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: NodusNet Account
+# Step 4: Download files + prepare install directory
 # ---------------------------------------------------------------------------
 
-step "Step 4: NodusNet Account"
-
-REGISTRY_HOST="registry.nodusrf.com"
-NODUSNET_USERNAME=""
-
-if $DRY_RUN; then
-    info "[dry-run] docker login $REGISTRY_HOST"
-    NODUSNET_USERNAME="dry-run-user"
-else
-    # Check if already logged in from a previous install
-    if docker pull "$REGISTRY_HOST/nodus-edge-fm:latest" --quiet &>/dev/null 2>&1; then
-        info "Already authenticated with NodusNet registry."
-        # Try to extract username from docker config
-        NODUSNET_USERNAME="$(python3 -c "
-import json, base64, pathlib
-cfg = json.loads(pathlib.Path.home().joinpath('.docker/config.json').read_text())
-auth = cfg.get('auths',{}).get('$REGISTRY_HOST',{}).get('auth','')
-if auth: print(base64.b64decode(auth).decode().split(':')[0])
-" 2>/dev/null || echo "")"
-    else
-        echo ""
-        echo -e "  Sign in with your NodusNet credentials."
-        echo -e "  ${DIM}Don't have an account? Sign up at https://nodusrf.com/edge${NC}"
-        echo ""
-
-        MAX_ATTEMPTS=3
-        ATTEMPT=0
-
-        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-            ATTEMPT=$((ATTEMPT + 1))
-
-            read -r -p "  NodusNet username: " NODUSNET_USERNAME
-            if [ -z "$NODUSNET_USERNAME" ]; then
-                warn "Username cannot be empty."
-                continue
-            fi
-
-            read -r -s -p "  NodusNet password: " NODUSNET_PASSWORD
-            echo ""
-
-            if echo "$NODUSNET_PASSWORD" | docker login "$REGISTRY_HOST" -u "$NODUSNET_USERNAME" --password-stdin &>/dev/null 2>&1; then
-                info "Signed in as ${BOLD}${NODUSNET_USERNAME}${NC}"
-                break
-            else
-                if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
-                    warn "Invalid credentials. Please try again. ($ATTEMPT/$MAX_ATTEMPTS)"
-                else
-                    echo ""
-                    err "Authentication failed after $MAX_ATTEMPTS attempts."
-                    echo ""
-                    echo -e "  Need an account? Sign up at ${BOLD}https://nodusrf.com/edge${NC}"
-                    echo ""
-                    exit 1
-                fi
-            fi
-        done
-
-        # Clear password from memory
-        unset NODUSNET_PASSWORD
-    fi
-fi
-
-# Export username so the setup wizard can pre-fill node ID / callsign
-export NODUSNET_USERNAME
-
-# ---------------------------------------------------------------------------
-# Step 5: Download files + prepare install directory
-# ---------------------------------------------------------------------------
-
-step "Step 5: Prepare ~/nodusnet/"
+step "Step 4: Prepare ~/nodusnet/"
 
 run mkdir -p "$INSTALL_DIR/data"
 
@@ -317,16 +238,32 @@ WIZARD_PATH="$INSTALL_DIR/.setup-wizard.py"
 ZIPMETA_PATH="$INSTALL_DIR/.zip_metro.json"
 REPEATERS_2M_PATH="$INSTALL_DIR/.repeaters_2m_us.json"
 
+# Detect Raspberry Pi (aarch64 + Pi hardware)
+IS_PI=false
+if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "armv7l" ]; then
+    if grep -qi "raspberry\|BCM2" /proc/cpuinfo 2>/dev/null || \
+       grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
+        IS_PI=true
+        info "Raspberry Pi detected — will use remote Whisper (no local container)"
+    fi
+fi
+
 if $DRY_RUN; then
     info "[dry-run] Would download/copy files to $INSTALL_DIR/"
 else
-    # docker-compose.yml (public repo already has no build: context)
-    resolve_file "docker-compose.yml" "$COMPOSE_DST" "docker-compose.yml"
+    # docker-compose.yml — strip build: context (not needed for image-based deploys)
+    resolve_file "docker-compose.yml" "$COMPOSE_DST.tmp" "docker-compose.yml"
+    sed '/^    build:/,/^    [a-z]/{ /^    build:/d; /^      context:/d; /^      dockerfile:/d; }' \
+        "$COMPOSE_DST.tmp" > "$COMPOSE_DST.tmp2"
+    rm -f "$COMPOSE_DST.tmp"
 
     # On Pi, remove depends_on whisper (whisper container won't run)
     if $IS_PI; then
-        sed -i '/depends_on:/,/condition:/d' "$COMPOSE_DST"
+        sed '/depends_on:/,/condition:/d' "$COMPOSE_DST.tmp2" > "$COMPOSE_DST"
+    else
+        mv "$COMPOSE_DST.tmp2" "$COMPOSE_DST"
     fi
+    rm -f "$COMPOSE_DST.tmp2"
 
     # Setup wizard
     resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
@@ -339,10 +276,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Run setup wizard
+# Step 5: Run setup wizard
 # ---------------------------------------------------------------------------
 
-step "Step 6: Setup Wizard"
+step "Step 5: Setup Wizard"
 
 info "Launching setup wizard..."
 echo ""
@@ -371,10 +308,10 @@ fi
 rm -f "$WIZARD_PATH"
 
 # ---------------------------------------------------------------------------
-# Step 7: Deploy Containers
+# Step 6: Pull images and start containers
 # ---------------------------------------------------------------------------
 
-step "Step 7: Deploy Containers"
+step "Step 6: Deploy Containers"
 
 # On Pi, scale whisper to 0 (user must provide a remote GPU endpoint)
 COMPOSE_EXTRA_ARGS=""
@@ -389,7 +326,7 @@ if $DRY_RUN; then
 else
     info "Pulling container images (this may take a few minutes on first run)..."
     if $IS_PI; then
-        docker compose -f "$COMPOSE_DST" pull recept-fm support-sidecar
+        docker compose -f "$COMPOSE_DST" pull nodus-edge support-sidecar
     else
         docker compose -f "$COMPOSE_DST" pull
     fi
@@ -399,10 +336,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 8: OTA Updater
+# Step 7: OTA Updater
 # ---------------------------------------------------------------------------
 
-step "Step 8: OTA Updater (Auto-Update)"
+step "Step 7: OTA Updater"
 
 UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 
@@ -454,10 +391,10 @@ TMREOF
 fi
 
 # ---------------------------------------------------------------------------
-# Step 9: Dashboard Restart Watcher
+# Step 8: Dashboard Restart Watcher
 # ---------------------------------------------------------------------------
 
-step "Step 9: Dashboard Restart Watcher"
+step "Step 8: Dashboard Restart Watcher"
 
 if $DRY_RUN; then
     info "[dry-run] Would install restart watcher"
@@ -495,10 +432,10 @@ RSTEOF
 fi
 
 # ---------------------------------------------------------------------------
-# Step 10: Wait for health
+# Step 9: Wait for health
 # ---------------------------------------------------------------------------
 
-step "Step 10: Health Check"
+step "Step 9: Health Check"
 
 if $DRY_RUN; then
     info "[dry-run] Would wait for health check"
@@ -539,14 +476,13 @@ else
     fi
 
     echo ""
-fi
-
-RECEPT_STATE="$(docker compose -f "$COMPOSE_DST" ps recept-fm --format '{{.State}}' 2>/dev/null || echo "")"
-if [ "$RECEPT_STATE" = "running" ]; then
-    info "Recept FM is running!"
-elif ! $DRY_RUN; then
-    warn "Recept FM state: $RECEPT_STATE"
-    warn "Check logs: docker compose -f $COMPOSE_DST logs recept-fm"
+    RECEPT_STATE="$(docker compose -f "$COMPOSE_DST" ps nodus-edge --format '{{.State}}' 2>/dev/null || echo "")"
+    if [ "$RECEPT_STATE" = "running" ]; then
+        info "NodusEdge is running!"
+    else
+        warn "NodusEdge state: $RECEPT_STATE"
+        warn "Check logs: docker compose -f $COMPOSE_DST logs nodus-edge"
+    fi
 fi
 
 # ---------------------------------------------------------------------------

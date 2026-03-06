@@ -78,7 +78,7 @@ write_state() {
     local recept_tag="$1" whisper_tag="$2" updater_ver="$3" compose_ver="$4"
     cat > "$STATE_FILE" <<STATEEOF
 {
-  "recept_fm_tag": "$recept_tag",
+  "nodus_edge_tag": "$recept_tag",
   "whisper_cpu_tag": "$whisper_tag",
   "updater_version": "$updater_ver",
   "compose_version": "$compose_ver",
@@ -172,9 +172,9 @@ log "Manifest fetched successfully"
 # Step 2: Parse manifest and current state
 # ---------------------------------------------------------------------------
 
-NEW_RECEPT_TAG="$(json_get "$MANIFEST_TMP" ".images.recept-fm.tag")"
+NEW_RECEPT_TAG="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.tag")"
 NEW_WHISPER_TAG="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.tag")"
-NEW_RECEPT_DIGEST="$(json_get "$MANIFEST_TMP" ".images.recept-fm.digest")"
+NEW_RECEPT_DIGEST="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.digest")"
 NEW_WHISPER_DIGEST="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.digest")"
 MANIFEST_UPDATER_VER="$(json_get "$MANIFEST_TMP" ".updater.version")"
 MANIFEST_UPDATER_SHA="$(json_get "$MANIFEST_TMP" ".updater.sha256")"
@@ -188,7 +188,7 @@ CUR_UPDATER_VER=""
 CUR_COMPOSE_VER=""
 
 if [ -f "$STATE_FILE" ]; then
-    CUR_RECEPT_TAG="$(json_get "$STATE_FILE" ".recept_fm_tag")"
+    CUR_RECEPT_TAG="$(json_get "$STATE_FILE" ".nodus_edge_tag")"
     CUR_WHISPER_TAG="$(json_get "$STATE_FILE" ".whisper_cpu_tag")"
     CUR_UPDATER_VER="$(json_get "$STATE_FILE" ".updater_version")"
     CUR_COMPOSE_VER="$(json_get "$STATE_FILE" ".compose_version")"
@@ -264,7 +264,7 @@ if [ "$NEW_RECEPT_TAG" != "$CUR_RECEPT_TAG" ] || [ "$NEW_WHISPER_TAG" != "$CUR_W
     if $FORCE; then
         log "Forced update — pulling images"
     else
-        log "Image tags changed: recept-fm=$CUR_RECEPT_TAG->$NEW_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG->$NEW_WHISPER_TAG"
+        log "Image tags changed: nodus-edge=$CUR_RECEPT_TAG->$NEW_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG->$NEW_WHISPER_TAG"
     fi
 fi
 
@@ -281,8 +281,8 @@ fi
 
 log "Pulling new images (existing containers stay up)..."
 
-# Export tags so docker compose can use ${RECEPT_FM_TAG} and ${WHISPER_CPU_TAG}
-export RECEPT_FM_TAG="$NEW_RECEPT_TAG"
+# Export tags so docker compose can use ${NODUS_EDGE_TAG} and ${WHISPER_CPU_TAG}
+export NODUS_EDGE_TAG="$NEW_RECEPT_TAG"
 export WHISPER_CPU_TAG="$NEW_WHISPER_TAG"
 
 if ! docker compose -f "$COMPOSE_FILE" pull 2>>"$LOG_FILE"; then
@@ -318,12 +318,12 @@ cleanup_canaries() {
 }
 trap 'cleanup_canaries; rm -f "$MANIFEST_TMP"' EXIT
 
-RECEPT_IMAGE="$(json_get "$MANIFEST_TMP" ".images.recept-fm.image"):$NEW_RECEPT_TAG"
+RECEPT_IMAGE="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.image"):$NEW_RECEPT_TAG"
 WHISPER_IMAGE="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.image"):$NEW_WHISPER_TAG"
 
 log "Canary pre-flight: testing $RECEPT_IMAGE"
 
-# Start canary recept-fm — no USB, alternate port, just verify it boots
+# Start canary nodus-edge — no USB, alternate port, just verify it boots
 docker run -d --rm \
     --name "$CANARY_RECEPT" \
     -p "127.0.0.1:${CANARY_RECEPT_PORT}:8082" \
@@ -353,7 +353,7 @@ while [ $CANARY_ELAPSED -lt $CANARY_MAX ]; do
     if ! $RECEPT_HEALTHY; then
         if curl -sf "http://127.0.0.1:${CANARY_RECEPT_PORT}/health" &>/dev/null; then
             RECEPT_HEALTHY=true
-            log "  canary recept-fm healthy (${CANARY_ELAPSED}s)"
+            log "  canary nodus-edge healthy (${CANARY_ELAPSED}s)"
         fi
     fi
 
@@ -371,7 +371,7 @@ while [ $CANARY_ELAPSED -lt $CANARY_MAX ]; do
     # Check if canary containers crashed
     if ! docker ps -q -f "name=$CANARY_RECEPT" 2>/dev/null | grep -q .; then
         if ! $RECEPT_HEALTHY; then
-            log "  canary recept-fm exited prematurely"
+            log "  canary nodus-edge exited prematurely"
             CANARY_OK=false
             break
         fi
@@ -402,7 +402,7 @@ if ! $CANARY_OK; then
         cp "$COMPOSE_FILE.bak" "$COMPOSE_FILE"
     fi
     FAIL_DETAIL="canary failed:"
-    $RECEPT_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL recept-fm"
+    $RECEPT_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL nodus-edge"
     $WHISPER_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL whisper"
     report_status "failed" "$FAIL_DETAIL"
     exit 1
@@ -438,16 +438,16 @@ ELAPSED=0
 HEALTHY=false
 
 while [ $ELAPSED -lt $MAX_WAIT ]; do
-    HEALTH="$(docker compose -f "$COMPOSE_FILE" ps recept-fm --format '{{.Health}}' 2>/dev/null || echo "")"
+    HEALTH="$(docker compose -f "$COMPOSE_FILE" ps nodus-edge --format '{{.Health}}' 2>/dev/null || echo "")"
 
     if [ "$HEALTH" = "healthy" ]; then
         HEALTHY=true
         break
     fi
 
-    STATE="$(docker compose -f "$COMPOSE_FILE" ps recept-fm --format '{{.State}}' 2>/dev/null || echo "")"
+    STATE="$(docker compose -f "$COMPOSE_FILE" ps nodus-edge --format '{{.State}}' 2>/dev/null || echo "")"
     if [ "$STATE" = "exited" ]; then
-        log "ERROR: recept-fm container exited after swap"
+        log "ERROR: nodus-edge container exited after swap"
         break
     fi
 
@@ -460,7 +460,7 @@ done
 # ---------------------------------------------------------------------------
 
 if $HEALTHY; then
-    log "Update successful — production recept-fm is healthy"
+    log "Update successful — production nodus-edge is healthy"
     write_state "$NEW_RECEPT_TAG" "$NEW_WHISPER_TAG" "$UPDATER_VERSION" "${MANIFEST_COMPOSE_VER:-$CUR_COMPOSE_VER}"
     report_status "success"
     rm -f "$COMPOSE_FILE.bak"
@@ -474,8 +474,8 @@ else
     fi
 
     if [ -n "$CUR_RECEPT_TAG" ] && [ -n "$CUR_WHISPER_TAG" ]; then
-        log "Rolling back to previous tags: recept-fm=$CUR_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG"
-        export RECEPT_FM_TAG="$CUR_RECEPT_TAG"
+        log "Rolling back to previous tags: nodus-edge=$CUR_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG"
+        export NODUS_EDGE_TAG="$CUR_RECEPT_TAG"
         export WHISPER_CPU_TAG="$CUR_WHISPER_TAG"
         docker compose -f "$COMPOSE_FILE" up -d 2>>"$LOG_FILE" || true
     fi
