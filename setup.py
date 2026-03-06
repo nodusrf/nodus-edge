@@ -879,7 +879,7 @@ def ask_whisper(args) -> str:
 
     if args.non_interactive:
         if pi_detected and args.whisper_url is None:
-            return ""  # Pi users must configure a remote endpoint
+            return "https://api.nodusalert.ai/v1/edge/whisper"
         return args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
     print()
@@ -889,10 +889,9 @@ def ask_whisper(args) -> str:
 
     if pi_detected:
         warn("Raspberry Pi detected — local Whisper is not supported.")
-        info("You need a remote GPU Whisper endpoint for transcription.")
-        info("Leave blank to disable transcription (can configure in .env later).")
+        info("Using NodusNet cloud transcription via Gateway.")
         print()
-        default_url = args.whisper_url or ""
+        default_url = args.whisper_url or "https://api.nodusalert.ai/v1/edge/whisper"
     else:
         default_url = args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
@@ -952,6 +951,7 @@ RECEPT_DIAGNOSTICS_ENDPOINT={diagnostics_endpoint}
 
 # ---- Transcription ----
 RECEPT_WHISPER_API_URL={whisper_api_url}
+RECEPT_WHISPER_AUTH_TOKEN={whisper_auth_token}
 RECEPT_TRANSCRIPTION_ENABLED={transcription_enabled}
 WHISPER_MODEL={whisper_model}
 
@@ -977,6 +977,7 @@ def generate_env(output_dir: Path, config: dict) -> str:
         synapse_auth_token=config.get("synapse_auth_token", ""),
         diagnostics_endpoint=diagnostics_ep,
         whisper_api_url=config.get("whisper_api_url", ""),
+        whisper_auth_token=config.get("whisper_auth_token", ""),
         transcription_enabled="true" if config.get("whisper_api_url") else "false",
         whisper_model=config.get("whisper_model", "base"),
         device_index=config.get("device_index", 0),
@@ -1158,6 +1159,7 @@ def main():
         "core_frequencies": core_hz,
         "candidate_frequencies": candidate_hz,
         "whisper_api_url": whisper_url,
+        "whisper_auth_token": server_config.get("synapse_auth_token", "") if "nodusalert.ai" in (whisper_url or "") else "",
         "device_index": sdr_config["device_index"],
         "gain": sdr_config["gain"],
         **rf_config,
