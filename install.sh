@@ -23,7 +23,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 INSTALL_DIR="$HOME/nodusedge"
-GITHUB_RAW="https://raw.githubusercontent.com/nodusrf/nodus/main"
+GITHUB_RAW="https://raw.githubusercontent.com/nodusrf/nodus-edge/main"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -280,7 +280,7 @@ if $DRY_RUN; then
     info "[dry-run] Would download/copy files to $INSTALL_DIR/"
 else
     # docker-compose.yml — strip build: context (not needed for image-based deploys)
-    resolve_file "edge/recept/docker-compose.yml" "$COMPOSE_DST.tmp" "docker-compose.yml"
+    resolve_file "docker-compose.yml" "$COMPOSE_DST.tmp" "docker-compose.yml"
     sed '/^    build:/,/^    [a-z]/{ /^    build:/d; /^      context:/d; /^      dockerfile:/d; }' \
         "$COMPOSE_DST.tmp" > "$COMPOSE_DST.tmp2"
     rm -f "$COMPOSE_DST.tmp"
@@ -289,13 +289,13 @@ else
     rm -f "$COMPOSE_DST.tmp2"
 
     # Setup wizard
-    resolve_file "scripts/setup-edge.py" "$WIZARD_PATH" "setup wizard"
+    resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
 
     # CBSA zip-to-metro mapping
-    resolve_file "recept/src/recept/data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
+    resolve_file "data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
 
     # Offline 2m repeater bundle
-    resolve_file "recept/src/recept/data/repeaters_2m_us.json" "$REPEATERS_2M_PATH" "2m repeater database (offline)"
+    resolve_file "data/repeaters_2m_us.json" "$REPEATERS_2M_PATH" "2m repeater database (offline)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 if $DRY_RUN; then
     info "[dry-run] Would install OTA updater"
 else
-    { resolve_file "scripts/nodusnet-updater.sh" "$UPDATER_PATH" "OTA updater"; } > /dev/null
+    { resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "OTA updater"; } > /dev/null
     chmod +x "$UPDATER_PATH"
     info "OTA updater configured"
 
