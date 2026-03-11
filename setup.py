@@ -1128,62 +1128,11 @@ def ask_rf_environment(args, sdr_config: dict | None = None) -> dict:
                     "squelch_threshold": result["squelch_threshold"],
                     "airband_squelch_snr_db": result["airband_squelch_snr_db"],
                 }
-        return {"squelch_threshold": 30, "airband_squelch_snr_db": 6.0}
+        return {"squelch_threshold": 25, "airband_squelch_snr_db": 8.67}
 
-    print()
-    print(f"  {BOLD}Step 5: RF Environment{NC}")
-    print(f"  {'─' * 50}")
-    print()
-    print("  Squelch controls how much signal is needed to start recording.")
-    print("  Too low = static-only recordings. Too high = missed weak signals.")
-    print("  You can always adjust after setup. For now, give an estimate.")
-    print()
+    info("Squelch: 25, SNR: 8.67 dB (default, adjustable in .env or dashboard)")
 
-    for key, (name, desc, sq, snr) in RF_PRESETS.items():
-        print(f"    [{key}] {BOLD}{name}{NC}")
-        print(f"        {desc} (squelch {sq}, SNR {snr} dB)")
-
-    # Only show auto-detect if rtl_power is available
-    import shutil
-    has_rtl_power = shutil.which("rtl_power") is not None
-    if has_rtl_power:
-        print(f"    [A] {BOLD}Auto-detect{NC}")
-        print(f"        Scan 2m band with RTL-SDR to measure noise floor (~10s)")
-    print()
-
-    default = "A" if has_rtl_power else "2"
-    choice = prompt("Select RF environment", default=default)
-
-    if choice.upper() == "A" and has_rtl_power:
-        device_index = (sdr_config or {}).get("device_index", 0)
-        gain = (sdr_config or {}).get("gain", 40)
-        info("Scanning 2m band for noise floor — this takes about 10 seconds...")
-        result = scan_noise_floor(device_index, str(gain))
-        if result:
-            info(f"Noise floor: {result['noise_floor_db']:.1f} dB → {result['label']}")
-            info(f"Recommended squelch: {result['squelch_threshold']}, SNR: {result['airband_squelch_snr_db']} dB")
-            print()
-            if prompt_yn("Accept these settings?"):
-                return {
-                    "squelch_threshold": result["squelch_threshold"],
-                    "airband_squelch_snr_db": result["airband_squelch_snr_db"],
-                }
-            warn("Falling back to manual selection.")
-            choice = prompt("Select preset (1/2/3)", default="2")
-        else:
-            warn("Scan failed — RTL-SDR may be unavailable or busy.")
-            warn("Falling back to manual selection.")
-            choice = prompt("Select preset (1/2/3)", default="2")
-
-    if choice not in RF_PRESETS:
-        warn(f"Unknown choice '{choice}', using Suburban / Moderate.")
-        choice = "2"
-
-    _, _, squelch, snr = RF_PRESETS[choice]
-    info(f"Squelch threshold: {squelch}, SNR: {snr} dB")
-    print(f"  Tip: NodusEdge will recommend adjustments if squelch needs tuning.")
-
-    return {"squelch_threshold": squelch, "airband_squelch_snr_db": snr}
+    return {"squelch_threshold": 25, "airband_squelch_snr_db": 8.67}
 
 
 # ---------------------------------------------------------------------------
