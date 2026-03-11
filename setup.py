@@ -1329,7 +1329,7 @@ def generate_env(output_dir: Path, config: dict) -> str:
         synapse_endpoint=synapse_ep,
         synapse_auth_token=config.get("synapse_auth_token", ""),
         diagnostics_endpoint=diagnostics_ep,
-        rem_endpoint=f"{synapse_ep}/v1" if synapse_ep else "",
+        rem_endpoint=synapse_ep,
         whisper_api_url=config.get("whisper_api_url", ""),
         whisper_auth_token=config.get("whisper_auth_token", ""),
         transcription_enabled="true" if config.get("whisper_api_url") else "false",
