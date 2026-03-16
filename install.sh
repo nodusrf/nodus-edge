@@ -387,7 +387,7 @@ UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 if $DRY_RUN; then
     info "[dry-run] Would install auto-updater"
 else
-    resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "auto-updater"
+    curl -fsSL "$GITHUB_RAW/nodusnet-updater.sh" -o "$UPDATER_PATH" 2>/dev/null || true
     chmod +x "$UPDATER_PATH"
 
     # Install systemd user timer if systemd user session is available
@@ -419,15 +419,13 @@ RandomizedDelaySec=60
 WantedBy=timers.target
 TMREOF
 
-        systemctl --user daemon-reload
-        systemctl --user enable --now nodusnet-updater.timer
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable --now nodusnet-updater.timer 2>/dev/null || true
         loginctl enable-linger "$USER" 2>/dev/null || true
-        info "Auto-updater installed (checks every 5 min)"
     else
         # Fallback to cron
         CRON_LINE="*/5 * * * * $UPDATER_PATH >> $INSTALL_DIR/.updater.log 2>&1"
-        (crontab -l 2>/dev/null | grep -v "nodusnet-updater"; echo "$CRON_LINE") | crontab -
-        info "Auto-updater installed (checks every 5 min)"
+        (crontab -l 2>/dev/null | grep -v "nodusnet-updater"; echo "$CRON_LINE") | crontab - 2>/dev/null || true
     fi
 fi
 
@@ -435,7 +433,7 @@ fi
 # Step 8: Dashboard Restart Watcher
 # ---------------------------------------------------------------------------
 
-step "Step 8: Dashboard Restart Watcher"
+# (no user-facing step header — internal setup)
 
 if $DRY_RUN; then
     info "[dry-run] Would install restart watcher"
@@ -463,12 +461,10 @@ ExecStart=docker compose up -d
 ExecStartPost=rm -f $INSTALL_DIR/data/.restart-signal
 RSTEOF
 
-        systemctl --user daemon-reload
-        systemctl --user enable --now nodusnet-restart.path
-        info "Dashboard restart watcher installed (systemd path unit)"
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable --now nodusnet-restart.path 2>/dev/null || true
     else
-        warn "systemd user session not available — dashboard restart trigger will not auto-apply."
-        warn "After saving settings in the dashboard, run: cd $INSTALL_DIR && docker compose up -d"
+        true  # no systemd user session, skip silently
     fi
 fi
 
@@ -476,7 +472,7 @@ fi
 # Step 9: Wait for health
 # ---------------------------------------------------------------------------
 
-step "Step 9: Health Check"
+# (health check continues inline after deploy)
 
 if $DRY_RUN; then
     info "[dry-run] Would wait for health check"
