@@ -1,0 +1,26 @@
+# Edge keyword watchlist
+# Tiers: urgent (immediate APRS alert), notable (included in stats), informational (logged only)
+# Patterns are Python regex, matched case-insensitively against transcript text.
+
+urgent:
+  - pattern: "mayday|emergency|10-33|officer down|shots fired"
+    label: "emergency"
+  - pattern: "evacuat|wildfire|tornado|flood warning"
+    label: "weather_emergency"
+  - pattern: "missing (person|child|hiker)|amber alert"
+    label: "missing_person"
+
+notable:
+  - pattern: "accident|crash|rollover|hazmat"
+    label: "incident"
+  - pattern: "power out|grid down|no power"
+    label: "infrastructure"
+
+informational:
+  - pattern: "net control|check.?in|roll call"
+    label: "net_activity"
+
+# Callsign triggers (any transmission from these callsigns)
+# watch_callsigns:
+#   - callsign: "W1AW"
+#     tier: "notable"
