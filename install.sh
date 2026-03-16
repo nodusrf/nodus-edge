@@ -332,7 +332,7 @@ fi
 export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
 export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
 
-python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
+python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
 
 # Verify wizard output (skip for dry run)
 if ! $DRY_RUN; then
