@@ -321,11 +321,12 @@ def ask_location(args, zip_metro: dict) -> dict:
     print()
     print(f"  {BOLD}Step 2: Location{NC}")
     print(f"  {'─' * 50}")
+    print(f"  We'll use your zip code to find nearby repeaters.")
     print()
 
     zip_code = ""
     while True:
-        zip_code = prompt("What is your zip code? (or 'manual' for manual entry)")
+        zip_code = prompt("Zip code (5 digits, or 'manual' for lat/lon entry)")
 
         if zip_code.lower() == "manual":
             loc = ask_manual_location()
@@ -362,7 +363,7 @@ def ask_location(args, zip_metro: dict) -> dict:
     default_metro = lookup_metro(zip_code, loc["city"], zip_metro)
     cbsa_source = " (CBSA)" if zip_code in zip_metro else ""
     print(f"  Your metro area will be: {BOLD}{default_metro}{NC}{cbsa_source} ({loc['city']}, {loc.get('state_abbrev', '')})")
-    choice = prompt("Is this correct? (y/n/custom metro name)", default="y")
+    choice = prompt("Correct? y=yes, n=re-enter, or type a custom metro name", default="y")
 
     if choice.lower() in ("y", "yes", ""):
         loc["metro"] = default_metro
@@ -397,9 +398,10 @@ def ask_callsign(args) -> str:
     print()
     print(f"  {BOLD}Step 3: Callsign{NC}")
     print(f"  {'─' * 50}")
+    print(f"  Your amateur radio callsign identifies this node on the network.")
     print()
 
-    callsign = prompt("What is your callsign? (optional, Enter to skip)")
+    callsign = prompt("Callsign (e.g. KK7QPZ, or Enter to skip)")
 
     if not callsign:
         info("No callsign — node will be anonymous.")
@@ -463,6 +465,7 @@ def ask_band(args) -> tuple[str, list[str]]:
     print()
     print(f"  {BOLD}Step 4b: Mode Selection{NC}")
     print(f"  {'─' * 50}")
+    print(f"  Choose what type of radio traffic to monitor.")
     print()
     print(f"    [1] {BOLD}FM 2m{NC}    Voice repeater monitoring (VHF 144-148 MHz)")
     print(f"    [2] {BOLD}FM 70cm{NC}  Voice repeater monitoring (UHF 420-450 MHz)")
@@ -470,7 +473,7 @@ def ask_band(args) -> tuple[str, list[str]]:
     print(f"    [4] {BOLD}APRS{NC}     Packet data on 144.390 MHz (Direwolf decoder)")
     print()
 
-    choice = prompt("Select mode", default="1")
+    choice = prompt("Enter 1-4", default="1")
 
     if choice in ("2", "70cm", "70"):
         return "fm", ["70cm"]
@@ -666,6 +669,7 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str,
     print()
     print(f"  {BOLD}Step 5: Repeater Discovery{NC}")
     print(f"  {'─' * 50}")
+    print(f"  Searching for active repeaters near your location...")
 
     repeaters, metadata = fetch_repeaters(lat, lon, state_name, radius, bands)
     core_hz, candidate_hz = split_frequencies(repeaters, bands)
@@ -1050,6 +1054,7 @@ def ask_sdr_device(args) -> dict:
     print()
     print(f"  {BOLD}Step 6: RTL-SDR Device{NC}")
     print(f"  {'─' * 50}")
+    print(f"  Detecting your SDR radio dongle.")
     print()
 
     devices = detect_rtlsdr_devices()
@@ -1077,7 +1082,7 @@ def ask_sdr_device(args) -> dict:
         except ValueError:
             device_index = 0
 
-    gain = prompt("RTL-SDR gain (0-49, or 'auto')", default="40")
+    gain = prompt("Gain level (0-49 dB, or 'auto')", default="40")
 
     return {
         "device_index": device_index,
@@ -1240,6 +1245,8 @@ def ask_whisper(args) -> str:
     print()
     print(f"  {BOLD}Step 8: Transcription{NC}")
     print(f"  {'─' * 50}")
+    print(f"  Whisper converts radio audio to text. The default uses the built-in")
+    print(f"  container. Press Enter to accept, or paste a custom URL.")
     print()
 
     if pi_detected:
