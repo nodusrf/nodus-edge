@@ -332,27 +332,27 @@ fi
 
 step "Step 5: Setup Wizard"
 
-info "Launching setup wizard..."
-echo ""
-
-WIZARD_ARGS=(--output-dir "$INSTALL_DIR")
-
 if $DRY_RUN; then
-    WIZARD_ARGS+=(--dry-run)
-fi
-
-# Append any wizard args forwarded from the command line
-WIZARD_ARGS+=("${WIZARD_EXTRA_ARGS[@]}")
-
-# Point the wizard at downloaded data files
-export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
-export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
-
-if exec 3</dev/tty 2>/dev/null; then
-    exec 3<&-
-    PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
+    info "[dry-run] Would run setup wizard"
 else
-    PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
+    info "Launching setup wizard..."
+    echo ""
+
+    WIZARD_ARGS=(--output-dir "$INSTALL_DIR")
+
+    # Append any wizard args forwarded from the command line
+    WIZARD_ARGS+=("${WIZARD_EXTRA_ARGS[@]}")
+
+    # Point the wizard at downloaded data files
+    export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
+    export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
+
+    if exec 3</dev/tty 2>/dev/null; then
+        exec 3<&-
+        PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
+    else
+        PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
+    fi
 fi
 
 # Verify wizard output (skip for dry run)

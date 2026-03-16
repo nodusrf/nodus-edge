@@ -109,23 +109,29 @@ def error(msg: str) -> None:
     print(f"  {RED}[ERROR]{NC} {msg}")
 
 
+def _stdin_bail():
+    """Exit with a helpful message when stdin is not interactive."""
+    error("Cannot read input (stdin is not a terminal).")
+    error("If you ran this via 'curl | bash', try downloading first:")
+    error("  curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh -o install.sh")
+    error("  bash install.sh")
+    sys.exit(1)
+
+
 def prompt(question: str, default: str = "", validator=None) -> str:
     """Prompt user for input with optional default and validation."""
+    # Bail immediately if stdin is not a terminal (piped/exhausted)
+    if not sys.stdin.isatty():
+        if default:
+            return default
+        _stdin_bail()
     suffix = f" [{default}]" if default else ""
-    eof_count = 0
     while True:
         try:
             sys.stdout.flush()
             answer = input(f"  {question}{suffix}: ").strip()
-            eof_count = 0
         except EOFError:
-            eof_count += 1
-            if eof_count > 2:
-                error("Cannot read input. If you ran this via 'curl | bash', try downloading first:")
-                error("  curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh -o install.sh")
-                error("  bash install.sh")
-                sys.exit(1)
-            answer = ""
+            _stdin_bail()
         if not answer and default:
             answer = default
         if validator:
@@ -138,12 +144,15 @@ def prompt(question: str, default: str = "", validator=None) -> str:
 
 def prompt_yn(question: str, default_yes: bool = True) -> bool:
     """Prompt for yes/no answer."""
+    if not sys.stdin.isatty():
+        return default_yes
     hint = "Y/n" if default_yes else "y/N"
     while True:
         try:
+            sys.stdout.flush()
             answer = input(f"  {question} [{hint}]: ").strip().lower()
         except EOFError:
-            answer = ""
+            return default_yes
         if not answer:
             return default_yes
         if answer in ("y", "yes"):
@@ -285,7 +294,21 @@ def ask_location(args, zip_metro: dict) -> dict:
             }
             zip_code = args.zip or ""
         elif args.zip:
-            loc = resolve_zip(args.zip)
+            if not ZIP_RE.match(args.zip):
+                error(f"Invalid zip code: {args.zip} (must be exactly 5 digits)")
+                sys.exit(1)
+            try:
+                loc = resolve_zip(args.zip)
+            except HTTPError as e:
+                if e.code == 404:
+                    error(f"Zip code {args.zip} not found.")
+                else:
+                    error(f"Zip code API error: {e.code}")
+                sys.exit(1)
+            except (URLError, Exception) as e:
+                error(f"Could not reach zip code API: {e}")
+                error("Use --lat/--lon/--city/--state instead.")
+                sys.exit(1)
             zip_code = args.zip
         else:
             error("Non-interactive mode requires --zip or --lat/--lon/--city/--state")
@@ -358,10 +381,18 @@ def ask_location(args, zip_metro: dict) -> dict:
 # Step 3: Callsign
 # ---------------------------------------------------------------------------
 
+def _sanitize_callsign(raw: str) -> str:
+    """Strip a callsign to alphanumeric only. Returns empty on garbage."""
+    clean = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+    if len(clean) < 3 or len(clean) > 7:
+        return ""
+    return clean
+
+
 def ask_callsign(args) -> str:
     """Ask for operator callsign (optional)."""
     if args.non_interactive:
-        return (args.callsign or "").upper()
+        return _sanitize_callsign(args.callsign or "")
 
     print()
     print(f"  {BOLD}Step 3: Callsign{NC}")
