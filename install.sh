@@ -350,9 +350,9 @@ export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
 
 if exec 3</dev/tty 2>/dev/null; then
     exec 3<&-
-    python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
+    PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
 else
-    python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
+    PYTHONUNBUFFERED=1 python3 -u "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
 fi
 
 # Verify wizard output (skip for dry run)
@@ -548,7 +548,7 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 
-NODE_ID="$(grep -E '^(NODUS_EDGE_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || echo "unknown")"
+NODE_ID="$(grep -E '^(RECEPT_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || echo "unknown")"
 
 echo ""
 echo "============================================================"

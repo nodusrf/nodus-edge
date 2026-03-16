@@ -112,10 +112,19 @@ def error(msg: str) -> None:
 def prompt(question: str, default: str = "", validator=None) -> str:
     """Prompt user for input with optional default and validation."""
     suffix = f" [{default}]" if default else ""
+    eof_count = 0
     while True:
         try:
+            sys.stdout.flush()
             answer = input(f"  {question}{suffix}: ").strip()
+            eof_count = 0
         except EOFError:
+            eof_count += 1
+            if eof_count > 2:
+                error("Cannot read input. If you ran this via 'curl | bash', try downloading first:")
+                error("  curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh -o install.sh")
+                error("  bash install.sh")
+                sys.exit(1)
             answer = ""
         if not answer and default:
             answer = default
@@ -710,7 +719,7 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str,
                 info(f"Trimmed to {len(core_hz)} core frequencies within SDR bandwidth.")
             elif choice == "2":
                 info("Multi-dongle: configure the second dongle in .env after setup.")
-                info("Set NODUS_EDGE_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
+                info("Set RECEPT_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
 
     if not args.non_interactive:
         print()
@@ -1229,7 +1238,7 @@ def ask_whisper(args) -> str:
             except Exception:
                 warn(f"Could not reach {url} — you can fix this in .env later.")
     else:
-        info("Transcription disabled. Set NODUS_EDGE_WHISPER_API_URL in .env to enable.")
+        info("Transcription disabled. Set RECEPT_WHISPER_API_URL in .env to enable.")
 
     return url
 
@@ -1244,31 +1253,31 @@ ENV_TEMPLATE_FM = """\
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-NODUS_EDGE_MODE=fm
-NODUS_EDGE_NODE_ID={node_id}
-NODUS_EDGE_METRO={metro}
-NODUS_EDGE_CALLSIGN={callsign}
+RECEPT_MODE=fm
+RECEPT_NODE_ID={node_id}
+RECEPT_METRO={metro}
+RECEPT_CALLSIGN={callsign}
 
 # ---- Scanner ----
-NODUS_EDGE_FM_SCANNER_BACKEND=airband
-NODUS_EDGE_FM_CORE_FREQUENCIES={core_frequencies}
-NODUS_EDGE_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
-NODUS_EDGE_FM_RTL_DEVICE_INDEX={device_index}
-NODUS_EDGE_FM_GAIN={gain}
+RECEPT_FM_SCANNER_BACKEND=airband
+RECEPT_FM_CORE_FREQUENCIES={core_frequencies}
+RECEPT_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
+RECEPT_FM_RTL_DEVICE_INDEX={device_index}
+RECEPT_FM_GAIN={gain}
 # Squelch: raise if you get static-only recordings, lower if missing weak signals
-NODUS_EDGE_FM_SQUELCH_THRESHOLD={squelch_threshold}
-NODUS_EDGE_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
+RECEPT_FM_SQUELCH_THRESHOLD={squelch_threshold}
+RECEPT_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
 
 # ---- Transcription ----
-NODUS_EDGE_WHISPER_API_URL={whisper_api_url}
-NODUS_EDGE_TRANSCRIPTION_ENABLED={transcription_enabled}
+RECEPT_WHISPER_API_URL={whisper_api_url}
+RECEPT_TRANSCRIPTION_ENABLED={transcription_enabled}
 WHISPER_MODEL={whisper_model}
 
 # ---- Logging ----
-NODUS_EDGE_LOG_LEVEL=INFO
+RECEPT_LOG_LEVEL=INFO
 """
 
 ENV_TEMPLATE_APRS = """\
@@ -1277,20 +1286,20 @@ ENV_TEMPLATE_APRS = """\
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-NODUS_EDGE_MODE=aprs
-NODUS_EDGE_NODE_ID={node_id}
-NODUS_EDGE_METRO={metro}
-NODUS_EDGE_CALLSIGN={callsign}
+RECEPT_MODE=aprs
+RECEPT_NODE_ID={node_id}
+RECEPT_METRO={metro}
+RECEPT_CALLSIGN={callsign}
 
 # ---- APRS ----
-NODUS_EDGE_APRS_FREQUENCY_HZ=144390000
-NODUS_EDGE_APRS_DEVICE_INDEX={device_index}
+RECEPT_APRS_FREQUENCY_HZ=144390000
+RECEPT_APRS_DEVICE_INDEX={device_index}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
 
 # ---- Logging ----
-NODUS_EDGE_LOG_LEVEL=INFO
+RECEPT_LOG_LEVEL=INFO
 """
 
 
