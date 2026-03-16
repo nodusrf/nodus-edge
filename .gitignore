@@ -2,7 +2,7 @@
 .env
 
 # Runtime data (but keep static mapping files)
-data/
+data/*
 !data/zip_metro.json
 !data/repeaters_us.json
 !data/repeaters_2m_us.json
