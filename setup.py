@@ -1269,7 +1269,7 @@ def ask_whisper(args) -> str:
             except Exception:
                 warn(f"Could not reach {url} — you can fix this in .env later.")
     else:
-        info("Transcription disabled. Set RECEPT_WHISPER_API_URL in .env to enable.")
+        info("Transcription disabled. Set NODUS_EDGE_WHISPER_API_URL in .env to enable.")
 
     return url
 
@@ -1284,31 +1284,31 @@ ENV_TEMPLATE_FM = """\
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-RECEPT_MODE=fm
-RECEPT_NODE_ID={node_id}
-RECEPT_METRO={metro}
-RECEPT_CALLSIGN={callsign}
+NODUS_EDGE_MODE=fm
+NODUS_EDGE_NODE_ID={node_id}
+NODUS_EDGE_METRO={metro}
+NODUS_EDGE_CALLSIGN={callsign}
 
 # ---- Scanner ----
-RECEPT_FM_SCANNER_BACKEND=airband
-RECEPT_FM_CORE_FREQUENCIES={core_frequencies}
-RECEPT_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
-RECEPT_FM_RTL_DEVICE_INDEX={device_index}
-RECEPT_FM_GAIN={gain}
+NODUS_EDGE_FM_SCANNER_BACKEND=airband
+NODUS_EDGE_FM_CORE_FREQUENCIES={core_frequencies}
+NODUS_EDGE_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
+NODUS_EDGE_FM_RTL_DEVICE_INDEX={device_index}
+NODUS_EDGE_FM_GAIN={gain}
 # Squelch: raise if you get static-only recordings, lower if missing weak signals
-RECEPT_FM_SQUELCH_THRESHOLD={squelch_threshold}
-RECEPT_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
+NODUS_EDGE_FM_SQUELCH_THRESHOLD={squelch_threshold}
+NODUS_EDGE_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
 
 # ---- Transcription ----
-RECEPT_WHISPER_API_URL={whisper_api_url}
-RECEPT_TRANSCRIPTION_ENABLED={transcription_enabled}
+NODUS_EDGE_WHISPER_API_URL={whisper_api_url}
+NODUS_EDGE_TRANSCRIPTION_ENABLED={transcription_enabled}
 WHISPER_MODEL={whisper_model}
 
 # ---- Logging ----
-RECEPT_LOG_LEVEL=INFO
+NODUS_EDGE_LOG_LEVEL=INFO
 """
 
 ENV_TEMPLATE_APRS = """\
@@ -1317,20 +1317,20 @@ ENV_TEMPLATE_APRS = """\
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-RECEPT_MODE=aprs
-RECEPT_NODE_ID={node_id}
-RECEPT_METRO={metro}
-RECEPT_CALLSIGN={callsign}
+NODUS_EDGE_MODE=aprs
+NODUS_EDGE_NODE_ID={node_id}
+NODUS_EDGE_METRO={metro}
+NODUS_EDGE_CALLSIGN={callsign}
 
 # ---- APRS ----
-RECEPT_APRS_FREQUENCY_HZ=144390000
-RECEPT_APRS_DEVICE_INDEX={device_index}
+NODUS_EDGE_APRS_FREQUENCY_HZ=144390000
+NODUS_EDGE_FM_RTL_DEVICE_INDEX={device_index}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
 
 # ---- Logging ----
-RECEPT_LOG_LEVEL=INFO
+NODUS_EDGE_LOG_LEVEL=INFO
 """
 
 
