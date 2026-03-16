@@ -249,37 +249,6 @@ def resolve_zip(zip_code: str) -> dict:
     }
 
 
-def ask_manual_location() -> dict:
-    """Fall back to manual location entry."""
-    print()
-    warn("Enter your location manually:")
-
-    def validate_float(v):
-        try:
-            float(v)
-            return None
-        except ValueError:
-            return "Must be a number."
-
-    def validate_state(v):
-        if v.upper() not in STATE_ABBREV_TO_NAME:
-            return "Unknown state abbreviation."
-        return None
-
-    lat = float(prompt("Latitude", validator=validate_float))
-    lon = float(prompt("Longitude", validator=validate_float))
-    city = prompt("City")
-    state_abbrev = prompt("State abbreviation (e.g. AZ)", validator=validate_state).upper()
-    state = STATE_ABBREV_TO_NAME[state_abbrev]
-
-    return {
-        "lat": lat,
-        "lon": lon,
-        "city": city,
-        "state": state,
-        "state_abbrev": state_abbrev,
-    }
-
 
 def ask_location(args, zip_metro: dict) -> dict:
     """Ask for zip code, resolve to location + metro."""
@@ -326,12 +295,7 @@ def ask_location(args, zip_metro: dict) -> dict:
 
     zip_code = ""
     while True:
-        zip_code = prompt("Zip code (5 digits, or 'manual' for lat/lon entry)")
-
-        if zip_code.lower() == "manual":
-            loc = ask_manual_location()
-            zip_code = ""
-            break
+        zip_code = prompt("Zip code (5 digits)")
 
         if not ZIP_RE.match(zip_code):
             error("Zip code must be exactly 5 digits.")
@@ -342,19 +306,12 @@ def ask_location(args, zip_metro: dict) -> dict:
             break
         except HTTPError as e:
             if e.code == 404:
-                error(f"Zip code {zip_code} not found.")
+                error(f"Zip code {zip_code} not found. Try again.")
             else:
-                error(f"API error: {e.code}")
-                if prompt_yn("Enter location manually?"):
-                    loc = ask_manual_location()
-                    zip_code = ""
-                    break
+                error(f"API error: {e.code}. Try again.")
         except (URLError, Exception) as e:
-            warn(f"Could not reach zip code API: {e}")
-            if prompt_yn("Enter location manually?"):
-                loc = ask_manual_location()
-                zip_code = ""
-                break
+            error(f"Could not reach zip code API: {e}")
+            error("Check your internet connection and try again.")
 
     info(f"Location: {loc['city']}, {loc.get('state_abbrev', '')} ({loc['lat']:.4f}, {loc['lon']:.4f})")
     print()
