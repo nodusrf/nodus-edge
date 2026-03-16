@@ -320,7 +320,7 @@ def ask_location(args, zip_metro: dict) -> dict:
     default_metro = lookup_metro(zip_code, loc["city"], zip_metro)
     cbsa_source = " (CBSA)" if zip_code in zip_metro else ""
     print(f"  Your metro area will be: {BOLD}{default_metro}{NC}{cbsa_source} ({loc['city']}, {loc.get('state_abbrev', '')})")
-    choice = prompt("Correct? y=yes, n=re-enter, or type a custom metro name", default="y")
+    choice = prompt("Press Enter to accept, or type a different metro name", default="y")
 
     if choice.lower() in ("y", "yes", ""):
         loc["metro"] = default_metro
