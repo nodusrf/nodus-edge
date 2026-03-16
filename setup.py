@@ -1202,38 +1202,37 @@ def ask_whisper(args) -> str:
     print()
     print(f"  {BOLD}Step 8: Transcription{NC}")
     print(f"  {'─' * 50}")
-    print(f"  Whisper converts radio audio to text. The default uses the built-in")
-    print(f"  container. Press Enter to accept, or paste a custom URL.")
+    print(f"  Whisper converts radio audio to text.")
     print()
 
     if pi_detected:
         warn("Raspberry Pi detected — local Whisper is not supported.")
-        info("Using NodusNet cloud transcription via Gateway.")
+        info("Using NodusNet cloud transcription.")
+        url = args.whisper_url or "https://api.nodusrf.com/v1/edge/whisper"
+    elif args.whisper_url is not None:
+        url = args.whisper_url
+    else:
+        print(f"    [1] {BOLD}Local{NC}     Built-in Whisper container (runs on this machine)")
+        print(f"    [2] {BOLD}NodusNet{NC}  Use NodusNet cloud transcription")
         print()
-        default_url = args.whisper_url or "https://api.nodusrf.com/v1/edge/whisper"
-    else:
-        default_url = args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
-    url = prompt(
-        "Whisper transcription endpoint",
-        default=default_url,
-    )
+        choice = prompt("Enter 1 or 2", default="1")
 
-    if url:
-        # Skip connectivity test for Docker internal DNS (container isn't running yet)
-        if "://whisper:" in url:
-            info(f"Using Docker internal DNS: {url}")
+        if choice == "2":
+            url = "https://api.nodusrf.com/v1/edge/whisper"
+            info("Using NodusNet cloud transcription.")
         else:
-            # Test connectivity
-            try:
-                req = Request(url)
-                req.add_header("User-Agent", USER_AGENT)
-                urlopen(req, timeout=5)
-                info(f"Whisper reachable at {url}")
-            except Exception:
-                warn(f"Could not reach {url} — you can fix this in .env later.")
-    else:
-        info("Transcription disabled. Set NODUS_EDGE_WHISPER_API_URL in .env to enable.")
+            url = "http://whisper:8000"
+            info("Using local Whisper container.")
+
+    if url and "://whisper:" not in url:
+        try:
+            req = Request(url)
+            req.add_header("User-Agent", USER_AGENT)
+            urlopen(req, timeout=5)
+            info(f"Whisper reachable at {url}")
+        except Exception:
+            pass
 
     return url
 
