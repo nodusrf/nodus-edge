@@ -293,7 +293,6 @@ def ask_location(args, zip_metro: dict) -> dict:
     print(f"  Please enter your zip code to find nearby repeaters.")
     print()
 
-    zip_code = ""
     while True:
         zip_code = prompt("Zip code (5 digits)")
 
@@ -303,35 +302,51 @@ def ask_location(args, zip_metro: dict) -> dict:
 
         try:
             loc = resolve_zip(zip_code)
-            break
         except HTTPError as e:
             if e.code == 404:
                 error(f"Zip code {zip_code} not found. Try again.")
             else:
                 error(f"API error: {e.code}. Try again.")
+            continue
         except (URLError, Exception) as e:
             error(f"Could not reach zip code API: {e}")
             error("Check your internet connection and try again.")
+            continue
 
-    info(f"Location: {loc['city']}, {loc.get('state_abbrev', '')} ({loc['lat']:.4f}, {loc['lon']:.4f})")
-    print()
+        metro = lookup_metro(zip_code, loc["city"], zip_metro)
+        print()
+        info(f"Location: {loc['city']}, {loc.get('state_abbrev', '')} ({loc['lat']:.4f}, {loc['lon']:.4f})")
+        info(f"Metro: {BOLD}{metro}{NC}")
+        print()
 
-    # Resolve metro via CBSA mapping, fall back to city name
-    default_metro = lookup_metro(zip_code, loc["city"], zip_metro)
-    cbsa_source = " (CBSA)" if zip_code in zip_metro else ""
-    print(f"  Your metro area will be: {BOLD}{default_metro}{NC}{cbsa_source} ({loc['city']}, {loc.get('state_abbrev', '')})")
-    choice = prompt("Press Enter to accept, or type a different metro name", default="y")
+        answer = prompt("Press Enter to accept, or enter a different zip code to search again")
+        if not answer:
+            loc["metro"] = metro
+            break
+        # They typed a new zip code, loop back
+        if ZIP_RE.match(answer):
+            zip_code = answer
+            try:
+                loc = resolve_zip(zip_code)
+            except HTTPError as e:
+                if e.code == 404:
+                    error(f"Zip code {zip_code} not found. Try again.")
+                else:
+                    error(f"API error: {e.code}. Try again.")
+                continue
+            except (URLError, Exception) as e:
+                error(f"Could not reach zip code API: {e}")
+                continue
+            metro = lookup_metro(zip_code, loc["city"], zip_metro)
+            print()
+            info(f"Location: {loc['city']}, {loc.get('state_abbrev', '')} ({loc['lat']:.4f}, {loc['lon']:.4f})")
+            info(f"Metro: {BOLD}{metro}{NC}")
+            print()
+            continue
+        else:
+            error("Enter a 5-digit zip code or press Enter to accept.")
+            continue
 
-    if choice.lower() in ("y", "yes", ""):
-        loc["metro"] = default_metro
-    elif choice.lower() in ("n", "no"):
-        custom = prompt("Enter metro name")
-        loc["metro"] = slugify_city(custom)
-    else:
-        # They typed a custom metro name directly
-        loc["metro"] = slugify_city(choice)
-
-    info(f"Metro: {loc['metro']}")
     return loc
 
 
