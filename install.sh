@@ -307,10 +307,10 @@ else
     resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
 
     # CBSA zip-to-metro mapping
-    resolve_file "src/nodus_edge/data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
+    resolve_file "data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
 
     # Offline 2m repeater bundle
-    resolve_file "src/nodus_edge/data/repeaters.json" "$REPEATERS_PATH" "repeater database (RepeaterBook)"
+    resolve_file "data/repeaters_2m_us.json" "$REPEATERS_PATH" "repeater database (RepeaterBook)"
 fi
 
 # ---------------------------------------------------------------------------
