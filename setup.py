@@ -731,8 +731,11 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str,
 
     if not args.non_interactive:
         print()
+        print(f"  These are the frequencies your node will monitor.")
+        print(f"  You can edit them in the .env file later if needed.")
+        print()
         if not prompt_yn("Accept these frequencies?"):
-            info("You can edit frequencies in the .env file after setup.")
+            info("Continuing anyway. Edit .env after setup to change them.")
 
     return core_hz, candidate_hz, repeaters, metadata
 

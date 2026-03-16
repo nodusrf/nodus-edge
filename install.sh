@@ -377,17 +377,17 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 7: OTA Updater
+# Step 7: Auto-Update
 # ---------------------------------------------------------------------------
 
-step "Step 7: OTA Updater"
+# (no user-facing step header — this is internal setup)
 
 UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 
 if $DRY_RUN; then
-    info "[dry-run] Would install OTA updater"
+    info "[dry-run] Would install auto-updater"
 else
-    resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "OTA updater"
+    resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "auto-updater"
     chmod +x "$UPDATER_PATH"
 
     # Install systemd user timer if systemd user session is available
@@ -397,7 +397,7 @@ else
 
         cat > "$UNIT_DIR/nodusnet-updater.service" <<SVCEOF
 [Unit]
-Description=NodusNet OTA Updater
+Description=NodusNet Auto-Updater
 
 [Service]
 Type=oneshot
@@ -408,7 +408,7 @@ SVCEOF
 
         cat > "$UNIT_DIR/nodusnet-updater.timer" <<TMREOF
 [Unit]
-Description=NodusNet OTA Update Check (every 5 min)
+Description=NodusNet Auto-Update Check (every 5 min)
 
 [Timer]
 OnBootSec=60
@@ -422,12 +422,12 @@ TMREOF
         systemctl --user daemon-reload
         systemctl --user enable --now nodusnet-updater.timer
         loginctl enable-linger "$USER" 2>/dev/null || true
-        info "OTA updater installed (systemd timer, every 5 min)"
+        info "Auto-updater installed (checks every 5 min)"
     else
         # Fallback to cron
         CRON_LINE="*/5 * * * * $UPDATER_PATH >> $INSTALL_DIR/.updater.log 2>&1"
         (crontab -l 2>/dev/null | grep -v "nodusnet-updater"; echo "$CRON_LINE") | crontab -
-        info "OTA updater installed (cron, every 5 min)"
+        info "Auto-updater installed (checks every 5 min)"
     fi
 fi
 
