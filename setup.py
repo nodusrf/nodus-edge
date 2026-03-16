@@ -290,7 +290,7 @@ def ask_location(args, zip_metro: dict) -> dict:
     print()
     print(f"  {BOLD}Step 2: Location{NC}")
     print(f"  {'─' * 50}")
-    print(f"  We'll use your zip code to find nearby repeaters.")
+    print(f"  Please enter your zip code to find nearby repeaters.")
     print()
 
     zip_code = ""
