@@ -53,9 +53,12 @@ _pending_notifications: list = []  # Server-pushed notifications from NodusRF
 
 
 def _require_dashboard_token(request: Request):
-    """Dependency: reject mutative requests unless a valid dashboard token is provided."""
+    """Dependency: reject mutative requests unless a valid dashboard token is provided.
+
+    When no NODUS_EDGE_DASHBOARD_TOKEN is set, the dashboard is open (localhost only).
+    """
     if not _dashboard_token:
-        raise HTTPException(status_code=403, detail="Dashboard token not configured. Set NODUS_EDGE_DASHBOARD_TOKEN in .env.")
+        return  # No token configured — allow all (local dashboard)
     auth = request.headers.get("Authorization", "")
     if auth == f"Bearer {_dashboard_token}":
         return
@@ -114,10 +117,8 @@ _ENV_FIELDS: Dict[str, dict] = {
     "NODUS_EDGE_WHISPER_API_URL":                {"label": "Whisper API URL",        "cat": "Transcription"},
     "NODUS_EDGE_TRANSCRIPTION_ENABLED":          {"label": "Transcription Enabled",  "cat": "Transcription"},
     "NODUSNET_SERVER":                       {"label": "Server",                 "cat": "Network"},
-    "NODUSNET_TOKEN":                        {"label": "Auth Token",             "cat": "Network"},
     "NODUS_EDGE_DASHBOARD_ENABLED":              {"label": "Dashboard Enabled",      "cat": "Dashboard"},
     "NODUS_EDGE_DASHBOARD_PORT":                 {"label": "Dashboard Port",         "cat": "Dashboard"},
-    "NODUS_EDGE_DASHBOARD_TOKEN":               {"label": "Dashboard Token",        "cat": "Dashboard"},
 }
 
 _ENV_CATEGORY_ORDER = ["Node", "Scanner", "Transcription", "Network", "Dashboard"]
@@ -1377,15 +1378,6 @@ def start_dashboard(
     _timezone = kwargs.pop("timezone", "") or ""
     _metro = kwargs.pop("metro", "") or ""
     _dashboard_token = kwargs.pop("dashboard_token", "") or ""
-    if not _dashboard_token:
-        _dashboard_token = secrets.token_urlsafe(24)
-        logger.warning(
-            "no_dashboard_token_configured",
-            generated_token=_dashboard_token,
-            hint="Set NODUS_EDGE_DASHBOARD_TOKEN in .env to use a persistent token. "
-                 "This auto-generated token is required for settings changes and will "
-                 "change on every restart.",
-        )
 
     # Startup warnings from validation
     _startup_warnings = kwargs.pop("startup_warnings", []) or []

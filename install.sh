@@ -309,8 +309,8 @@ else
     # CBSA zip-to-metro mapping
     resolve_file "data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
 
-    # Offline 2m repeater bundle
-    resolve_file "data/repeaters_2m_us.json" "$REPEATERS_PATH" "repeater database (RepeaterBook)"
+    # Offline repeater bundle (all bands — wizard filters by selected band)
+    resolve_file "data/repeaters_us.json" "$REPEATERS_PATH" "repeater database (RepeaterBook)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -332,7 +332,11 @@ fi
 export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
 export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
 
-python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
+if [ -c /dev/tty ]; then
+    python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
+else
+    python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
+fi
 
 # Verify wizard output (skip for dry run)
 if ! $DRY_RUN; then
@@ -527,7 +531,7 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 
-NODE_ID="$(grep '^NODUS_EDGE_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "unknown")"
+NODE_ID="$(grep -E '^(NODUS_EDGE_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || echo "unknown")"
 
 echo ""
 echo "============================================================"
@@ -544,7 +548,7 @@ echo -e "  ${BOLD}Restart:${NC}     cd $INSTALL_DIR && docker compose up -d"
 echo -e "  ${BOLD}Status:${NC}      cd $INSTALL_DIR && docker compose ps"
 echo -e "  ${BOLD}Update now:${NC}  $INSTALL_DIR/nodusnet-updater.sh"
 echo ""
-echo -e "  ${DIM}GPU Whisper? Edit .env, set NODUS_EDGE_WHISPER_API_URL, then:${NC}"
+echo -e "  ${DIM}GPU Whisper? Edit .env, set WHISPER_API_URL endpoint, then:${NC}"
 echo -e "  ${DIM}cd $INSTALL_DIR && docker compose up -d --scale whisper=0${NC}"
 echo ""
 echo "============================================================"

@@ -8,4 +8,4 @@ It does not interpret, alert, or decide.
 
 import os
 
-__version__ = os.environ.get("NODUS_VERSION", "1.0.1")
+__version__ = os.environ.get("NODUS_VERSION", "1.0.2")

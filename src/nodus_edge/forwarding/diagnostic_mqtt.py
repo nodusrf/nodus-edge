@@ -11,4 +11,4 @@ logger = structlog.get_logger(__name__)
 
 def publish_diagnostic(node_id: str, event_type: str, payload: dict) -> None:
     """Log a diagnostic event (best-effort, non-blocking)."""
-    logger.debug("diagnostic_event", node_id=node_id, event=event_type, **payload)
+    logger.debug("diagnostic_event", node_id=node_id, event_type=event_type, **payload)
