@@ -32,6 +32,7 @@ from urllib.request import Request, urlopen
 # Constants
 # ---------------------------------------------------------------------------
 
+SETUP_VERSION = "1.1.0"
 ZIPPOPOTAM_API = "https://api.zippopotam.us/us/{zip}"
 USER_AGENT = "NodusNet-Setup/1.0 (+https://nodusrf.com; nodusrf@proton.me)"
 
@@ -318,8 +319,8 @@ def ask_location(args, zip_metro: dict) -> dict:
         info(f"Location: {loc['city']}, {loc.get('state_abbrev', '')} ({loc['lat']:.4f}, {loc['lon']:.4f})")
         info(f"Metro: {BOLD}{metro}{NC}")
         print()
-
-        answer = prompt("Press Enter to accept, or enter a different zip code to search again")
+        print(f"  Press Enter to accept, or enter a different zip code to try again.")
+        answer = prompt(">")
         if not answer:
             loc["metro"] = metro
             break
@@ -1494,7 +1495,7 @@ def main():
     # Banner
     print()
     print("=" * 60)
-    print(f"  {BOLD}NodusNet Edge Node Setup{NC}")
+    print(f"  {BOLD}NodusNet Edge Node Setup{NC}  v{SETUP_VERSION}")
     print("=" * 60)
     print()
     print("  This wizard configures a new edge node for NodusNet.")

@@ -77,27 +77,9 @@ resolve_file() {
     local dest="$2"
     local desc="$3"
 
-    # Check if we're inside the nodus repo
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null || echo ".")" && pwd 2>/dev/null || echo "")"
-    # When running from private repo: scripts/ -> strip to repo root
-    # When running from public repo or standalone: script is at repo root
-    local repo_dir="${script_dir%/scripts}"
-    local local_file="$repo_dir/$repo_path"
-
-    # Also check if the script is at repo root (public repo layout)
-    if [ ! -f "$local_file" ] && [ -f "$script_dir/$repo_path" ]; then
-        local_file="$script_dir/$repo_path"
-    fi
-
-    if [ -f "$local_file" ] 2>/dev/null && [ "$(realpath "$local_file")" != "$(realpath "$dest" 2>/dev/null)" ]; then
-        cp "$local_file" "$dest"
-        info "Copied $desc (local)"
-    else
-        info "Downloading $desc..."
-        curl -fsSL "$GITHUB_RAW/$repo_path" -o "$dest" || die "Failed to download $desc"
-        info "Downloaded $desc"
-    fi
+    info "Downloading $desc..."
+    curl -fsSL "$GITHUB_RAW/$repo_path" -o "$dest" || die "Failed to download $desc"
+    info "Downloaded $desc"
 }
 
 # ---------------------------------------------------------------------------
