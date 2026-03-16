@@ -32,8 +32,21 @@ DIM='\033[2m'
 NC='\033[0m'
 
 DRY_RUN=false
+WIZARD_EXTRA_ARGS=()
+SKIP_NEXT=false
 for arg in "$@"; do
-    [ "$arg" = "--dry-run" ] && DRY_RUN=true
+    if $SKIP_NEXT; then
+        SKIP_NEXT=false
+        continue
+    fi
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+    esac
+done
+# Forward wizard-compatible args (everything except --dry-run)
+for arg in "$@"; do
+    [ "$arg" = "--dry-run" ] && continue
+    WIZARD_EXTRA_ARGS+=("$arg")
 done
 
 # ---------------------------------------------------------------------------
@@ -328,11 +341,15 @@ if $DRY_RUN; then
     WIZARD_ARGS+=(--dry-run)
 fi
 
+# Append any wizard args forwarded from the command line
+WIZARD_ARGS+=("${WIZARD_EXTRA_ARGS[@]}")
+
 # Point the wizard at downloaded data files
 export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
 export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
 
-if [ -c /dev/tty ]; then
+if exec 3</dev/tty 2>/dev/null; then
+    exec 3<&-
     python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" </dev/tty
 else
     python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
