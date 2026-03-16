@@ -2,9 +2,9 @@
 services:
   nodus-edge:
     build:
-      context: ../..                    # For local builds from repo
-      dockerfile: edge/recept/Dockerfile
-    image: registry.nodusrf.com/nodus-edge:${NODUS_EDGE_TAG:-latest}
+      context: .
+      dockerfile: Dockerfile
+    image: nodusrf/nodus-edge:${NODUS_EDGE_TAG:-latest}
     privileged: true                     # Required for RTL-SDR USB access
     devices:
       - /dev/bus/usb:/dev/bus/usb       # RTL-SDR passthrough
@@ -13,7 +13,7 @@ services:
       - "8073:8073"                     # Edge dashboard
     volumes:
       - ./data:/data                    # audio capture + JSON output
-      - ./repeaters.json:/app/recept/data/repeaters.json:ro
+      - ./repeaters.json:/app/nodus_edge/data/repeaters.json:ro
       - ./.env:/app/.env                # dashboard settings editor
     depends_on:
       whisper:
@@ -26,7 +26,10 @@ services:
       retries: 3
 
   whisper:
-    image: registry.nodusrf.com/nodus-whisper-cpu:${WHISPER_CPU_TAG:-latest}
+    build:
+      context: ./whisper-cpu
+      dockerfile: Dockerfile
+    image: nodusrf/nodus-edge:whisper-cpu
     environment:
       - WHISPER_MODEL=${WHISPER_MODEL:-base}
       - WHISPER_DEVICE=cpu
@@ -41,7 +44,10 @@ services:
       retries: 3
 
   support-sidecar:
-    image: registry.nodusrf.com/nodus-support-sidecar:${SUPPORT_SIDECAR_TAG:-latest}
+    build:
+      context: ./support-sidecar
+      dockerfile: Dockerfile
+    image: nodusrf/nodus-edge:support-sidecar
     environment:
       - TUNNEL_TOKEN=${NODUS_TUNNEL_TOKEN}
       - AUTHORIZED_KEYS=${NODUS_SUPPORT_AUTHORIZED_KEYS:-}

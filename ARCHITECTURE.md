@@ -1,173 +1,83 @@
 <!-- RELEASE: nodusrf/nodus-edge ARCHITECTURE.md -->
-# NodusNet Edge — Architecture Overview
+# Architecture
 
-How the NodusNet edge node update and deployment system works under the hood.
+## Overview
 
-## Design Principles
+Nodus Edge is a radio monitoring station that runs on commodity hardware. It captures RF signals via an RTL-SDR dongle, transcribes audio to text using Whisper, and outputs structured segments.
 
-1. **Pull-based, never push** — Your edge node reaches out to check for updates. We never initiate inbound connections to your machine. No ports are opened, no tunnels are required.
-2. **Canary before swap** — New images are validated in throwaway containers before touching your running stack. If the canary fails, nothing changes.
-3. **Automatic rollback** — If a post-update health check fails, the system reverts to your previous working images automatically.
-4. **Zero-downtime pulls** — New images download in the background while your existing containers keep running. The swap only happens after the download completes and the canary passes.
-
-## System Overview
+## Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Your Machine                                           │
-│                                                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
-│  │  nodus-edge  │  │   whisper    │  │   updater    │  │
-│  │  (scanner +  │  │  (speech-to- │  │  (checks for │  │
-│  │  dashboard)  │  │   text, CPU) │  │  updates)    │  │
-│  └──────┬───────┘  └──────────────┘  └──────┬───────┘  │
-│         │                                    │          │
-│         │ outbound only                      │ outbound │
-└─────────┼────────────────────────────────────┼──────────┘
-          │                                    │
-          ▼                                    ▼
-   ┌─────────────┐                    ┌──────────────┐
-   │  NodusNet   │                    │   Container  │
-   │  Central    │                    │   Registry   │
-   │  (segments, │                    │   (images)   │
-   │  heartbeats)│                    └──────────────┘
-   └─────────────┘
+RTL-SDR dongle
+    │
+    ▼
+RTLSDR-Airband (multichannel FM scanner)
+    │  WAV files per channel
+    ▼
+FM Pipeline
+    ├── Audio normalization (target RMS 0.15)
+    ├── Morse detection (CW segments decoded before Whisper)
+    ├── Whisper transcription (local CPU or remote GPU)
+    ├── Hallucination filtering
+    └── Callsign extraction
+    │
+    ▼
+Segment output
+    ├── Local JSON files (/data/output/)
+    ├── Dashboard live feed (SSE)
+    └── Synapse forwarding (optional, NodusNet)
 ```
 
-## OTA Update Pipeline
+## Components
 
-The updater runs every 5 minutes via a systemd timer (or cron fallback). Here's what happens on each cycle:
+### Scanner Backends
 
-### Step 1: Manifest Check
+The ingestion layer supports multiple scanner backends:
 
-The updater fetches a version manifest from the NodusNet API — a small JSON file declaring the current image tags, checksums, and component versions.
+- **RTLSDR-Airband** (default) -- Multichannel FM scanner. Monitors up to 32 frequencies simultaneously from a single dongle. Outputs WAV files per active channel.
+- **rtl_fm** -- Sequential scanner. One frequency at a time. Simpler but less capable.
+- **P25** -- Trunked radio decoding via OP25.
+- **APRS** -- Packet radio decoding via Direwolf.
 
-```json
-{
-  "images": {
-    "nodus-edge":  { "tag": "latest", "digest": "sha256:abc..." },
-    "whisper-cpu": { "tag": "latest", "digest": "sha256:def..." }
-  },
-  "updater":  { "version": "1", "sha256": "..." },
-  "compose":  { "version": "3", "sha256": "..." }
-}
-```
+### Transcription Pipeline
 
-The updater compares manifest tags against its local state file (`.updater-state.json`). If everything matches, it exits — no work to do. A typical check takes <1 second and uses negligible bandwidth.
+Audio flows through several stages before becoming a text segment:
 
-### Step 2: Self-Update
+1. **Audio normalization** -- Adjusts gain to target RMS, prevents clipping
+2. **Morse detection** -- Identifies CW transmissions and decodes them without Whisper
+3. **Whisper transcription** -- Sends audio to the local whisper-cpu container (or a remote GPU endpoint)
+4. **Hallucination filtering** -- Detects and removes common Whisper hallucinations (repeated phrases, phantom text from silence)
+5. **Callsign extraction** -- Identifies amateur radio callsigns in the transcription
 
-If the manifest declares a newer updater version, the updater downloads its own replacement, verifies the SHA-256 checksum, replaces itself, and re-executes. This ensures the update mechanism itself can be patched without requiring user intervention.
+### Whisper CPU
 
-### Step 3: Compose File Update
+A standalone FastAPI service wrapping faster-whisper. Optimized for radio audio:
 
-If the manifest declares a newer docker-compose version, the updater downloads it with SHA-256 verification. The current compose file is backed up for rollback.
+- Voice Activity Detection (VAD) tuned for radio squelch patterns
+- Rate limiting, queue depth limiting, GPU temperature guards
+- Streams results segment-by-segment (NDJSON)
 
-### Step 4: Image Pull (Background)
+### Dashboard
 
-New images are pulled with `docker compose pull`. During this entire download — which can take minutes on slow connections — your existing containers remain running and serving. No interruption occurs until the canary passes.
+Static HTML/CSS/JS served by the edge's FastAPI server on port 8073. Features:
 
-### Step 5: Canary Pre-Flight
+- Live segment feed with audio playback
+- Frequency activity spectrum
+- Scanner and system health status
+- Settings editor (modifies .env)
+- Support request flow (NodusNet only)
 
-This is the safety gate. Before touching your production containers, the updater spins up **throwaway canary containers** from the new images on alternate ports:
+## Configuration
 
-```
-Production (untouched)          Canary (temporary)
-─────────────────────          ────────────────────
-nodus-edge    :8082     →      canary-recept  :18082
-whisper       :8000     →      canary-whisper :18000
-```
+All configuration is via environment variables with the `NODUS_EDGE_` prefix, managed through Pydantic settings. See `.env.example` for the full list.
 
-The canary containers run without hardware access (no USB passthrough) and with `DRY_RUN=true`. The updater waits up to 90 seconds for both canaries to respond to health checks.
+## NodusNet Integration
 
-**If either canary fails** — crashes, times out, or never becomes healthy — the update is aborted. Your production containers are untouched. The failure is reported back to NodusNet for investigation.
+When connected to NodusNet (`NODUSNET_SERVER` configured), the edge node:
 
-**If both canaries pass** — the new images are verified bootable and healthy. Canary containers are torn down, and the update proceeds to the swap.
+- Checks in with REM (Remote Edge Management) for version policy and compliance tokens
+- Forwards verified segments to Synapse for correlation
+- Receives remote support diagnostics
+- Reports health via periodic heartbeats
 
-### Step 6: Production Swap
-
-With canaries passing, the updater runs `docker compose up -d` to replace the production containers with the verified images. This is a standard Docker Compose rolling restart — typically 2-5 seconds of downtime.
-
-### Step 7: Post-Swap Health Check
-
-After the swap, the updater monitors the new production containers for up to 120 seconds, waiting for the health check to report healthy.
-
-### Step 8: Rollback or Commit
-
-**If healthy** — the updater writes the new tags to its state file and reports success. The backup compose file is cleaned up.
-
-**If unhealthy** — the updater rolls back:
-1. Restores the backed-up compose file (if it was updated)
-2. Re-deploys the previous image tags
-3. Reports the failure
-
-The rollback restores the exact previous state. Your node recovers automatically.
-
-## What Runs on Your Machine
-
-The edge node consists of three containers:
-
-| Container | Purpose | Resource Usage |
-|-----------|---------|----------------|
-| `nodus-edge` | RTL-SDR scanning, audio capture, transcription dispatch, local dashboard | ~200 MB RAM, low CPU (spikes during audio processing) |
-| `whisper` | Speech-to-text (runs locally on CPU) | ~500 MB RAM (model-dependent), CPU-intensive during transcription |
-| `updater` | Checks for updates every 5 min | Negligible (runs for <1 second, then sleeps) |
-
-All containers run from a single `docker-compose.yml` in `~/nodusnet/`. Your configuration (`.env`) and captured data (`data/`) are stored on the host filesystem via Docker volume mounts — they persist across updates.
-
-### Network Behavior
-
-- **Outbound only** — all connections are initiated by your node
-- **No listening ports exposed** to the internet (the dashboard binds to `localhost:8073`)
-- **No inbound SSH, no tunnels, no remote access** in the default configuration
-- Traffic: audio segments to NodusNet central, health heartbeats, and periodic manifest checks
-
-### Data Stored Locally
-
-```
-~/nodusnet/
-├── .env                    # Your configuration (frequencies, callsign, API key)
-├── docker-compose.yml      # Container definitions
-├── repeaters.json          # Local repeater database (generated at setup)
-├── data/                   # Captured audio + transcription output
-│   ├── fm_capture/         # Raw audio segments (auto-cleaned)
-│   └── output/             # Processed JSON segments
-├── .updater-state.json     # Current image versions
-└── .updater.log            # Update history (last 500 lines, auto-trimmed)
-```
-
-## Security Considerations
-
-- **No root required** — Docker handles device access via `--privileged` for the USB dongle only
-- **API key authentication** — all communication with NodusNet central uses a device-specific bearer token
-- **SHA-256 verification** — updater scripts and compose files are checksum-verified before being applied
-- **No arbitrary code execution** — the updater only pulls Docker images and restarts containers. It does not download or execute scripts beyond its own self-update (which is checksum-verified)
-- **Canary isolation** — canary containers run without hardware access and are destroyed after validation
-- **Audit trail** — update history is logged locally in `.updater.log` and reported to NodusNet central
-
-## Opting Out
-
-The OTA updater is entirely optional. To disable it:
-
-```bash
-# Disable the systemd timer
-systemctl --user disable --now nodusnet-updater.timer
-
-# Or remove the cron entry
-crontab -e  # delete the nodusnet-updater line
-```
-
-You can still update manually at any time:
-
-```bash
-cd ~/nodusnet
-docker compose pull
-docker compose up -d
-```
-
-Or trigger a single update check:
-
-```bash
-~/nodusnet/nodusnet-updater.sh          # normal check
-~/nodusnet/nodusnet-updater.sh --force  # pull even if tags match
-```
+All NodusNet features are optional. Without configuration, the edge node runs independently.

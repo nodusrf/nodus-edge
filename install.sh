@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# RELEASE: nodusrf/nodus-edge install.sh
 # NodusNet Edge Node — One-Command Installer
 #
 # Install from anywhere:
-#   bash -c "$(curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus/main/scripts/install-edge.sh)"
+#   curl -fsSL https://raw.githubusercontent.com/nodusrf/nodus-edge/main/install.sh | bash
 #
 # Or from the repo:
-#   ./scripts/install-edge.sh
+#   ./install.sh
 #
 # Options:
 #   --dry-run    Preview without making changes
@@ -55,6 +54,10 @@ run() {
     fi
 }
 
+# Use sudo only when not already root
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
 # Resolve a file: use local repo copy if available, otherwise download from GitHub
 resolve_file() {
     local repo_path="$1"
@@ -64,10 +67,17 @@ resolve_file() {
     # Check if we're inside the nodus repo
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}" 2>/dev/null || echo ".")" && pwd 2>/dev/null || echo "")"
+    # When running from private repo: scripts/ -> strip to repo root
+    # When running from public repo or standalone: script is at repo root
     local repo_dir="${script_dir%/scripts}"
     local local_file="$repo_dir/$repo_path"
 
-    if [ -f "$local_file" ] 2>/dev/null; then
+    # Also check if the script is at repo root (public repo layout)
+    if [ ! -f "$local_file" ] && [ -f "$script_dir/$repo_path" ]; then
+        local_file="$script_dir/$repo_path"
+    fi
+
+    if [ -f "$local_file" ] 2>/dev/null && [ "$(realpath "$local_file")" != "$(realpath "$dest" 2>/dev/null)" ]; then
         cp "$local_file" "$dest"
         info "Copied $desc (local)"
     else
@@ -123,12 +133,12 @@ fi
 if ! command -v python3 &>/dev/null; then
     info "python3 not found — installing..."
     if command -v apt-get &>/dev/null; then
-        run sudo apt-get update -qq
-        run sudo apt-get install -y -qq python3
+        run $SUDO apt-get update -qq
+        run $SUDO apt-get install -y -qq python3
     elif command -v dnf &>/dev/null; then
-        run sudo dnf install -y python3
+        run $SUDO dnf install -y python3
     elif command -v pacman &>/dev/null; then
-        run sudo pacman -S --noconfirm python
+        run $SUDO pacman -S --noconfirm python
     else
         die "python3 is required. Install it with your package manager."
     fi
@@ -157,7 +167,7 @@ fi
 # Add user to docker group (if not already)
 if ! groups "$USER" 2>/dev/null | grep -qw docker; then
     info "Adding $USER to docker group..."
-    run sudo usermod -aG docker "$USER"
+    run $SUDO usermod -aG docker "$USER"
     warn "You may need to log out and back in for group changes to take effect."
     warn "If 'docker compose' fails below, run: newgrp docker"
 fi
@@ -229,7 +239,7 @@ else
     if $DRY_RUN; then
         info "[dry-run] Would write $UDEV_RULE"
     else
-        echo "$UDEV_CONTENT" | sudo tee "$UDEV_RULE" > /dev/null
+        echo "$UDEV_CONTENT" | $SUDO tee "$UDEV_RULE" > /dev/null
         UDEV_CHANGED=true
     fi
 fi
@@ -241,16 +251,16 @@ else
     if $DRY_RUN; then
         info "[dry-run] Would write $BLACKLIST_CONF"
     else
-        echo "$BLACKLIST_CONTENT" | sudo tee "$BLACKLIST_CONF" > /dev/null
+        echo "$BLACKLIST_CONTENT" | $SUDO tee "$BLACKLIST_CONF" > /dev/null
         UDEV_CHANGED=true
     fi
 fi
 
 if $UDEV_CHANGED; then
     info "Reloading udev rules..."
-    run sudo udevadm control --reload-rules
-    run sudo udevadm trigger
-    info "USB permissions configured. Replug your RTL-SDR if it was already connected."
+    $SUDO udevadm control --reload-rules 2>/dev/null && $SUDO udevadm trigger 2>/dev/null \
+        && info "USB permissions configured. Replug your RTL-SDR if it was already connected." \
+        || warn "Could not reload udev (container environment?). USB rules applied on next boot."
 fi
 
 # ---------------------------------------------------------------------------
@@ -264,7 +274,7 @@ run mkdir -p "$INSTALL_DIR/data"
 COMPOSE_DST="$INSTALL_DIR/docker-compose.yml"
 WIZARD_PATH="$INSTALL_DIR/.setup-wizard.py"
 ZIPMETA_PATH="$INSTALL_DIR/.zip_metro.json"
-REPEATERS_2M_PATH="$INSTALL_DIR/.repeaters_2m_us.json"
+REPEATERS_PATH="$INSTALL_DIR/.repeaters.json"
 
 # Detect Raspberry Pi (aarch64 + Pi hardware)
 IS_PI=false
@@ -272,7 +282,7 @@ if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "armv7l" ]; then
     if grep -qi "raspberry\|BCM2" /proc/cpuinfo 2>/dev/null || \
        grep -qi "raspberry" /proc/device-tree/model 2>/dev/null; then
         IS_PI=true
-        info "Raspberry Pi detected — will use remote Whisper for transcription"
+        info "Raspberry Pi detected — will use remote Whisper (no local container)"
     fi
 fi
 
@@ -285,17 +295,22 @@ else
         "$COMPOSE_DST.tmp" > "$COMPOSE_DST.tmp2"
     rm -f "$COMPOSE_DST.tmp"
 
-    mv "$COMPOSE_DST.tmp2" "$COMPOSE_DST"
+    # On Pi, remove depends_on whisper (whisper container won't run)
+    if $IS_PI; then
+        sed '/depends_on:/,/condition:/d' "$COMPOSE_DST.tmp2" > "$COMPOSE_DST"
+    else
+        mv "$COMPOSE_DST.tmp2" "$COMPOSE_DST"
+    fi
     rm -f "$COMPOSE_DST.tmp2"
 
     # Setup wizard
     resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
 
     # CBSA zip-to-metro mapping
-    resolve_file "data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
+    resolve_file "src/nodus_edge/data/zip_metro.json" "$ZIPMETA_PATH" "zip-to-metro data (CBSA)"
 
     # Offline 2m repeater bundle
-    resolve_file "data/repeaters_2m_us.json" "$REPEATERS_2M_PATH" "2m repeater database (offline)"
+    resolve_file "src/nodus_edge/data/repeaters.json" "$REPEATERS_PATH" "repeater database (RepeaterBook)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -315,9 +330,9 @@ fi
 
 # Point the wizard at downloaded data files
 export NODUSNET_ZIP_METRO_PATH="$ZIPMETA_PATH"
-export NODUSNET_REPEATERS_2M_PATH="$REPEATERS_2M_PATH"
+export NODUSNET_REPEATERS_PATH="$REPEATERS_PATH"
 
-python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}" < /dev/tty
+python3 "$WIZARD_PATH" "${WIZARD_ARGS[@]}"
 
 # Verify wizard output (skip for dry run)
 if ! $DRY_RUN; then
@@ -343,15 +358,16 @@ if $IS_PI; then
     COMPOSE_EXTRA_ARGS="--scale whisper=0"
 fi
 
-export NODUS_TUNNEL_TOKEN="${NODUS_TUNNEL_TOKEN:-}"
-
 if $DRY_RUN; then
     info "[dry-run] docker compose -f $COMPOSE_DST pull"
     info "[dry-run] docker compose -f $COMPOSE_DST up -d $COMPOSE_EXTRA_ARGS"
 else
     info "Pulling container images (this may take a few minutes on first run)..."
-    docker compose -f "$COMPOSE_DST" pull nodus-edge support-sidecar whisper 2>/dev/null || \
+    if $IS_PI; then
         docker compose -f "$COMPOSE_DST" pull nodus-edge support-sidecar
+    else
+        docker compose -f "$COMPOSE_DST" pull
+    fi
 
     info "Starting containers..."
     docker compose -f "$COMPOSE_DST" up -d $COMPOSE_EXTRA_ARGS
@@ -361,17 +377,15 @@ fi
 # Step 7: OTA Updater
 # ---------------------------------------------------------------------------
 
-step "Step 7: Post-Install Setup"
-info "Configuring OTA updater and restart watcher..."
+step "Step 7: OTA Updater"
 
 UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 
 if $DRY_RUN; then
     info "[dry-run] Would install OTA updater"
 else
-    { resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "OTA updater"; } > /dev/null
+    resolve_file "nodusnet-updater.sh" "$UPDATER_PATH" "OTA updater"
     chmod +x "$UPDATER_PATH"
-    info "OTA updater configured"
 
     # Install systemd user timer if systemd user session is available
     if systemctl --user status &>/dev/null 2>&1; then
@@ -414,7 +428,11 @@ TMREOF
     fi
 fi
 
-# Dashboard Restart Watcher
+# ---------------------------------------------------------------------------
+# Step 8: Dashboard Restart Watcher
+# ---------------------------------------------------------------------------
+
+step "Step 8: Dashboard Restart Watcher"
 
 if $DRY_RUN; then
     info "[dry-run] Would install restart watcher"
@@ -452,28 +470,56 @@ RSTEOF
 fi
 
 # ---------------------------------------------------------------------------
-# Step 8: NodusNet Connection Test
+# Step 9: Wait for health
 # ---------------------------------------------------------------------------
 
-step "Step 8: NodusNet Connection Test"
+step "Step 9: Health Check"
 
 if $DRY_RUN; then
-    info "[dry-run] Would test NodusNet connectivity"
+    info "[dry-run] Would wait for health check"
+elif $IS_PI; then
+    info "Raspberry Pi: skipping local Whisper health check (using remote endpoint)"
+    echo ""
 else
-    # Read node_id and server from .env
-    NODE_ID="$(grep '^RECEPT_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "unknown")"
-    SERVER="$(grep '^RECEPT_SYNAPSE_ENDPOINT=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "")"
+    info "Waiting for Whisper to download model and become healthy..."
+    info "(First run may take 1-3 minutes while the model downloads)"
+    echo ""
 
-    if [ -n "$SERVER" ]; then
-        info "Testing connection to NodusNet..."
-        if curl -sf "${SERVER}/v1/health" > /dev/null 2>&1; then
-            info "Connected to NodusNet"
-        else
-            warn "Could not reach NodusNet at ${SERVER}"
-            warn "The node will retry automatically. Check your network if this persists."
+    MAX_WAIT=180
+    ELAPSED=0
+    INTERVAL=5
+
+    while [ $ELAPSED -lt $MAX_WAIT ]; do
+        HEALTH="$(docker compose -f "$COMPOSE_DST" ps whisper --format '{{.Health}}' 2>/dev/null || echo "")"
+        if [ "$HEALTH" = "healthy" ]; then
+            info "Whisper is healthy!"
+            break
         fi
+
+        STATE="$(docker compose -f "$COMPOSE_DST" ps whisper --format '{{.State}}' 2>/dev/null || echo "")"
+        if [ "$STATE" = "exited" ]; then
+            warn "Whisper container exited unexpectedly."
+            warn "Check logs: docker compose -f $COMPOSE_DST logs whisper"
+            break
+        fi
+
+        printf "    Waiting... (%ds / %ds)\r" "$ELAPSED" "$MAX_WAIT"
+        sleep $INTERVAL
+        ELAPSED=$((ELAPSED + INTERVAL))
+    done
+
+    if [ $ELAPSED -ge $MAX_WAIT ]; then
+        warn "Timed out waiting for Whisper (${MAX_WAIT}s). It may still be downloading."
+        warn "Check status: docker compose -f $COMPOSE_DST ps"
+    fi
+
+    echo ""
+    EDGE_STATE="$(docker compose -f "$COMPOSE_DST" ps nodus-edge --format '{{.State}}' 2>/dev/null || echo "")"
+    if [ "$EDGE_STATE" = "running" ]; then
+        info "NodusEdge is running!"
     else
-        info "Standalone mode — no server connectivity test."
+        warn "NodusEdge state: $EDGE_STATE"
+        warn "Check logs: docker compose -f $COMPOSE_DST logs nodus-edge"
     fi
 fi
 
@@ -481,7 +527,7 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 
-NODE_ID="$(grep '^RECEPT_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "unknown")"
+NODE_ID="$(grep '^NODUS_EDGE_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "unknown")"
 
 echo ""
 echo "============================================================"
@@ -498,7 +544,7 @@ echo -e "  ${BOLD}Restart:${NC}     cd $INSTALL_DIR && docker compose up -d"
 echo -e "  ${BOLD}Status:${NC}      cd $INSTALL_DIR && docker compose ps"
 echo -e "  ${BOLD}Update now:${NC}  $INSTALL_DIR/nodusnet-updater.sh"
 echo ""
-echo -e "  ${DIM}GPU Whisper? Edit .env, set RECEPT_WHISPER_API_URL, then:${NC}"
+echo -e "  ${DIM}GPU Whisper? Edit .env, set NODUS_EDGE_WHISPER_API_URL, then:${NC}"
 echo -e "  ${DIM}cd $INSTALL_DIR && docker compose up -d --scale whisper=0${NC}"
 echo ""
 echo "============================================================"

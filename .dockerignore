@@ -1,0 +1,12 @@
+# RELEASE: nodusrf/nodus-edge .dockerignore
+.git
+.env
+.env.*
+data/
+*.pyc
+__pycache__
+.pytest_cache
+.mypy_cache
+*.egg-info
+dist/
+build/

@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NodusEdge Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+    <div class="header-left">
+        <div class="logo">Nodus<span class="accent">Edge</span></div>
+        <div class="node-id" id="node-id">--</div>
+        <div class="node-version" id="node-version" style="font-size:0.65rem;color:var(--text-dim,#64748b);font-family:monospace;margin-left:6px"></div>
+    </div>
+    <div class="header-right">
+        <div class="header-actions">
+            <div class="metro-badge" id="metro-badge" style="display:none" title="Metro area">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+                <span id="metro-label"></span>
+            </div>
+            <a class="header-btn" href="https://discord.gg/QqeERd7Ek" target="_blank" rel="noopener noreferrer" title="Join our Discord">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.947 2.418-2.157 2.418z"/></svg>
+            </a>
+            <button class="header-btn" id="feedback-btn" title="Send Feedback">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><line x1="9" x2="15" y1="10" y2="10"/><line x1="12" x2="12" y1="7" y2="13"/></svg>
+            </button>
+            <div class="notif-wrapper" id="notif-wrapper">
+                <button class="header-btn" id="notif-btn" title="Notifications">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+                    <span class="notif-badge" id="notif-badge" style="display:none">0</span>
+                </button>
+                <div class="notif-dropdown" id="notif-dropdown" style="display:none">
+                    <div class="notif-dropdown-header">
+                        <span class="notif-dropdown-title">Notifications</span>
+                    </div>
+                    <div class="notif-dropdown-body" id="notif-list">
+                        <div class="notif-empty">No notifications yet</div>
+                    </div>
+                </div>
+            </div>
+            <button class="header-btn" id="connection-btn" title="Connection to NodusNet">
+                <svg id="conn-icon-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13a10 10 0 0 1 14 0"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></svg>
+                <svg id="conn-icon-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><line x1="2" x2="22" y1="2" y2="22"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 20 0"/><line x1="12" x2="12.01" y1="20" y2="20"/></svg>
+            </button>
+        </div>
+        <div class="header-clocks">
+            <div class="ntp-clock" id="ntp-clock"></div>
+            <div class="uptime-clock" id="uptime-clock"></div>
+        </div>
+    </div>
+</div>
+
+<nav class="tab-nav">
+    <button class="tab-btn active" data-tab="feed">Live Feed <span class="count" id="feed-count">0</span></button>
+    <button class="tab-btn" data-tab="frequencies">Frequencies</button>
+    <button class="tab-btn" data-tab="traffic">Traffic</button>
+    <button class="tab-btn" data-tab="debug">Debug</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
+    <button class="tab-btn" data-tab="help">Help</button>
+    <button class="tab-btn" data-tab="support">Support</button>
+    <button class="tab-btn" data-tab="status">Status</button>
+    <button class="tab-btn" data-tab="spectrum">Spectrum</button>
+</nav>
+
+<!-- Validation Warnings Banner -->
+<div class="warnings-banner" id="warnings-banner" style="display:none">
+    <div id="warnings-list"></div>
+</div>
+
+<!-- Version Update Banner -->
+<div class="version-banner" id="version-banner" style="display:none">
+    <span id="version-banner-text">Update available</span>
+    <div class="version-banner-actions">
+        <button class="btn" id="version-update-btn">Update Now</button>
+        <button class="version-banner-dismiss" id="version-dismiss-btn" title="Dismiss">&times;</button>
+    </div>
+</div>
+
+<!-- Compose Update Banner -->
+<div class="version-banner" id="compose-banner" style="display:none">
+    <div id="compose-banner-text"></div>
+    <div class="version-banner-actions">
+        <button class="version-banner-dismiss" id="compose-dismiss-btn" title="Dismiss">&times;</button>
+    </div>
+</div>
+
+<!-- Live Feed Tab -->
+<div class="tab-content active" id="tab-feed">
+    <div class="spectrum-map" id="spectrum-map"></div>
+    <div id="feed-list">
+        <div class="empty-state" id="feed-empty">
+            <h3>Waiting for segments...</h3>
+            <p>Segments will appear here as the scanner captures transmissions.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Frequencies Tab -->
+<div class="tab-content" id="tab-frequencies">
+    <div id="freq-content">
+        <div class="empty-state">
+            <h3>No frequency data yet</h3>
+            <p>Frequency stats will populate as segments arrive.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Traffic Tab -->
+<div class="tab-content" id="tab-traffic">
+    <div class="stat-grid" id="traffic-stats">
+        <div class="stat-card">
+            <div class="stat-label">Segments Today</div>
+            <div class="stat-value" id="stat-segments">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Unique Callsigns</div>
+            <div class="stat-value" id="stat-callsigns">0</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">Stored Segments</div>
+            <div class="stat-value" id="stat-stored">0</div>
+        </div>
+    </div>
+    <div class="chart-container">
+        <div class="chart-title">Segments per Hour (Last 24h)</div>
+        <div class="bar-chart" id="hourly-chart"></div>
+    </div>
+    <div class="chart-container">
+        <div class="chart-title">Top Frequencies</div>
+        <ul class="top-freq-list" id="top-freq-list"></ul>
+    </div>
+</div>
+
+<!-- Debug Tab -->
+<div class="tab-content" id="tab-debug">
+    <div class="stat-grid" id="debug-stats"></div>
+    <div class="filter-cards" id="debug-filters"></div>
+    <div class="chart-container" id="debug-audit-container">
+        <div class="chart-title">Quality Gate Log <span id="audit-speed-slot" class="audit-speed-slot"></span></div>
+        <table class="audit-table" id="debug-audit-table">
+            <thead><tr>
+                <th>Time</th>
+                <th>Freq</th>
+                <th>Outcome</th>
+                <th>Text</th>
+                <th></th>
+                <th></th>
+            </tr></thead>
+            <tbody id="debug-audit-body"></tbody>
+        </table>
+    </div>
+    <!-- Log Console -->
+    <div class="chart-container" id="log-console-container">
+        <div class="log-console-header">
+            <div class="chart-title">Container Logs</div>
+            <div class="log-console-actions">
+                <button class="btn btn-sm" id="log-save-btn" title="Save logs to file">Save Logs</button>
+                <button class="btn btn-sm" id="log-push-btn" title="Push diagnostic dump to NodusNet">Push to NodusNet</button>
+                <span class="log-push-status" id="log-push-status"></span>
+            </div>
+        </div>
+        <div class="log-terminal" id="log-terminal">
+            <div class="log-terminal-content" id="log-terminal-content"></div>
+        </div>
+        <div class="log-console-footer">
+            <span class="log-line-count" id="log-line-count">0 lines</span>
+            <span class="log-autoscroll-indicator" id="log-autoscroll-indicator">Auto-scroll</span>
+        </div>
+    </div>
+    <!-- SDR Status Panel -->
+    <div class="chart-container" id="sdr-status-container">
+        <div class="chart-title sdr-status-header">
+            SDR Status
+            <button class="sdr-toggle-btn" id="sdr-toggle-btn" title="Expand/collapse">&#9660;</button>
+        </div>
+        <div id="sdr-status-body" style="display:none">
+            <div class="sdr-info-grid" id="sdr-info-grid"></div>
+            <div class="sdr-section">
+                <div class="sdr-section-title">Generated Config</div>
+                <pre class="sdr-pre" id="sdr-config-contents">Loading...</pre>
+            </div>
+            <div class="sdr-section">
+                <div class="sdr-section-title">Process stderr <span class="sdr-stderr-count" id="sdr-stderr-count"></span></div>
+                <pre class="sdr-pre" id="sdr-stderr-contents">Loading...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Settings Tab -->
+<div class="tab-content" id="tab-settings">
+    <div class="settings-section">
+        <h3>Squelch Threshold</h3>
+        <div class="squelch-control" id="squelch-control">
+            <div class="squelch-slider-row">
+                <input type="range" class="squelch-slider" id="squelch-slider" min="-50" max="-5" step="1" value="-18">
+                <span class="squelch-value" id="squelch-value">-18</span>
+                <span class="squelch-unit">dBFS</span>
+                <button class="btn btn-primary squelch-apply" id="squelch-apply">Apply</button>
+            </div>
+            <div class="squelch-labels">
+                <span>-50 (sensitive)</span>
+                <span id="squelch-recommended-label"></span>
+                <span>-5 (quiet)</span>
+            </div>
+            <p class="squelch-sublabel">Lower dBFS = more sensitive; higher dBFS = less noise. Restarts airband subprocess only (fast).</p>
+        </div>
+    </div>
+
+    <div class="settings-section">
+        <h3>Configuration (.env)</h3>
+        <div id="env-editor"></div>
+        <div class="env-actions">
+            <button class="btn btn-primary" id="env-save-btn" disabled>Save Changes</button>
+            <span class="env-save-status" id="env-save-status"></span>
+        </div>
+    </div>
+
+    <div class="restart-banner" id="restart-banner" style="display:none">
+        <span>Settings saved. Restart required to apply .env changes.</span>
+        <button class="btn" id="restart-btn">Restart Container</button>
+    </div>
+</div>
+
+<!-- Help Tab -->
+<div class="tab-content" id="tab-help">
+    <div class="faq-heading">Frequently Asked Questions</div>
+
+    <details class="faq-item">
+        <summary class="faq-question">How do I tune the squelch level?</summary>
+        <div class="faq-answer">
+            <p>Go to the <strong>Settings</strong> tab and adjust the squelch slider. Lower dBFS values (more negative) make the scanner more sensitive (captures weaker signals but more noise). Higher dBFS values (closer to 0) reduce noise but may miss weak transmissions.</p>
+            <p>The gold marker shows the <strong>recommended</strong> level based on your recent signal data. Start there and adjust up if you see too many noise segments, or down if you're missing activity.</p>
+            <p>Clicking "Apply" restarts only the airband subprocess &mdash; it takes about 2 seconds and does not restart the container.</p>
+        </div>
+    </details>
+
+    <details class="faq-item">
+        <summary class="faq-question">Why am I not seeing any signals?</summary>
+        <div class="faq-answer">
+            <p>Check these in order:</p>
+            <ol>
+                <li><strong>Antenna</strong> &mdash; Is the antenna connected and suited for 2m/70cm? A mag-mount on a metal surface works best.</li>
+                <li><strong>Frequencies</strong> &mdash; Are you monitoring active repeaters in your area? Check RepeaterBook for local listings.</li>
+                <li><strong>Squelch</strong> &mdash; Too high a squelch will filter out everything. Try raising it toward -30 dBFS if you&rsquo;re missing signals.</li>
+                <li><strong>RTL-SDR</strong> &mdash; Check the Debug tab &mdash; if "Process Alive" is false, the USB dongle may need a reset.</li>
+            </ol>
+        </div>
+    </details>
+
+    <details class="faq-item">
+        <summary class="faq-question">What does "scanner parking" mean?</summary>
+        <div class="faq-answer">
+            <p>RTLSDR-Airband monitors all configured frequencies simultaneously using FFT (no sequential scanning). Unlike traditional scanners, it never "parks" on one frequency &mdash; every channel is demodulated in parallel.</p>
+            <p>If you see activity on only one frequency, it's because that's the only active repeater, not a scanning issue.</p>
+        </div>
+    </details>
+
+    <details class="faq-item">
+        <summary class="faq-question">How do I add or change frequencies?</summary>
+        <div class="faq-answer">
+            <p>Edit the <code>NODUS_EDGE_FM_CORE_FREQUENCIES</code> field in the Settings tab (or directly in <code>/app/.env</code>). The value is a JSON array of frequencies in Hz, e.g.:</p>
+            <pre>[146940000, 147120000, 145230000]</pre>
+            <p>After saving, click "Restart Container" to apply the changes. The scanner will restart with the new frequency list.</p>
+        </div>
+    </details>
+
+    <details class="faq-item">
+        <summary class="faq-question">Can I run NodusEdge without internet (standalone mode)?</summary>
+        <div class="faq-answer">
+            <p>Yes. NodusEdge works fully standalone. Without a NodusNet connection, segments are stored locally and displayed on the dashboard. You won't get repeater enrichment from the cloud, but the bundled repeater database covers most US repeaters.</p>
+            <p>To connect later, set <code>NODUSNET_SERVER</code> in Settings and restart.</p>
+        </div>
+    </details>
+
+    <details class="faq-item">
+        <summary class="faq-question">Where are audio files stored?</summary>
+        <div class="faq-answer">
+            <p>Audio files are stored in <code>/data/captures/</code> inside the container. WAV files are kept for playback from the Live Feed tab. MP3 source files from RTLSDR-Airband are deleted after conversion unless <code>NODUS_EDGE_FM_AIRBAND_KEEP_MP3=true</code> is set.</p>
+            <p>The capture directory is volume-mounted from the host, so files persist across container restarts.</p>
+        </div>
+    </details>
+</div>
+
+<!-- Support Tab -->
+<div class="tab-content" id="tab-support">
+    <div id="support-standalone-notice" class="info-banner" style="display:none">
+        <strong>Standalone mode</strong> &mdash; Remote support requires a NodusNet connection. Local scanning and transcription work normally.
+    </div>
+    <!-- Support form (shown when no active session) -->
+    <div id="support-form-section">
+        <div class="settings-section">
+            <h3>Request Support</h3>
+            <p class="support-description-label">Describe what's going on:</p>
+            <textarea class="support-textarea" id="support-description" placeholder="e.g. No audio coming through, was working yesterday..." rows="3" maxlength="500"></textarea>
+            <div class="support-tags">
+                <p class="support-tags-label">Tags <span class="text-muted">(auto-suggested, click to toggle)</span></p>
+                <div class="support-tag-grid" id="support-tag-grid">
+                    <button class="support-tag" data-tag="no-audio">no-audio</button>
+                    <button class="support-tag" data-tag="no-transcript">no-transcript</button>
+                    <button class="support-tag" data-tag="crashed">crashed</button>
+                    <button class="support-tag" data-tag="slow">slow</button>
+                    <button class="support-tag" data-tag="usb">usb</button>
+                    <button class="support-tag" data-tag="disk-full">disk-full</button>
+                    <button class="support-tag" data-tag="network">network</button>
+                    <button class="support-tag" data-tag="update">update</button>
+                </div>
+            </div>
+            <div class="support-actions">
+                <button class="btn btn-primary" id="support-submit-btn">Request Support</button>
+                <span class="support-note">NodusNet will remotely diagnose your node.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active session modal overlay -->
+    <div id="support-modal-overlay" class="support-modal-overlay" style="display:none">
+        <div class="support-modal">
+            <div class="support-modal-header">
+                <div class="support-modal-indicator"></div>
+                <span>NodusNet Support</span>
+            </div>
+
+            <!-- Progress stepper -->
+            <div class="support-stepper" id="support-stepper">
+                <div class="support-step active" data-step="submit">
+                    <div class="support-step-icon">1</div>
+                    <div class="support-step-body">
+                        <div class="support-step-label">Submitting request</div>
+                        <div class="support-step-detail" id="step-submit-detail">Sending to NodusNet...</div>
+                    </div>
+                </div>
+                <div class="support-step" data-step="received">
+                    <div class="support-step-icon">2</div>
+                    <div class="support-step-body">
+                        <div class="support-step-label">Request received</div>
+                        <div class="support-step-detail" id="step-received-detail"></div>
+                    </div>
+                </div>
+                <div class="support-step" data-step="diagnosing">
+                    <div class="support-step-icon">3</div>
+                    <div class="support-step-body">
+                        <div class="support-step-label">Running diagnostics</div>
+                        <div class="support-step-detail" id="step-diagnosing-detail"></div>
+                    </div>
+                </div>
+                <div class="support-step" data-step="complete">
+                    <div class="support-step-icon">4</div>
+                    <div class="support-step-body">
+                        <div class="support-step-label">Complete</div>
+                        <div class="support-step-detail" id="step-complete-detail"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live activity log (shown while diagnosing) -->
+            <div id="support-activity-panel" class="support-activity-panel">
+                <div class="support-activity-log" id="support-activity-log"></div>
+                <div class="support-activity-clock" id="support-elapsed"></div>
+            </div>
+
+            <!-- Results (shown when done) -->
+            <div id="support-modal-results" style="display:none">
+                <div id="support-results-content"></div>
+            </div>
+
+            <!-- Footer -->
+            <div class="support-modal-footer">
+                <span class="support-modal-ttl" id="support-modal-ttl"></span>
+                <button class="btn btn-sm" id="support-close-btn" style="display:none">Close</button>
+                <button class="btn btn-sm" id="support-stop-btn" style="display:none">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Session history -->
+    <div id="support-history-section">
+        <div class="settings-section" style="margin-top:16px">
+            <h3>Recent Sessions</h3>
+            <div id="support-history-content">
+                <div class="text-muted">No previous support sessions.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Status Tab -->
+<div class="tab-content" id="tab-status">
+    <div id="status-content">
+        <div class="empty-state">
+            <h3>Loading status...</h3>
+        </div>
+    </div>
+</div>
+
+<!-- Spectrum Tab -->
+<div class="tab-content" id="tab-spectrum">
+    <div class="spectrum-container">
+        <div class="spectrum-panel">
+            <div class="spectrum-panel-title">Signal Strength</div>
+            <canvas id="spectrum-bars"></canvas>
+            <div class="spectrum-legend">
+                <span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span> Signal (dB)</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:var(--red)"></span> Squelch</span>
+                <span class="legend-item"><span class="legend-swatch" style="background:var(--yellow)"></span> Recommended</span>
+                <span class="legend-item squelch-hint" id="squelch-hint" style="display:none; font-style:italic; color:var(--text-muted)"></span>
+            </div>
+        </div>
+        <div class="spectrum-panel">
+            <div class="spectrum-panel-title">Waterfall (30 min)</div>
+            <canvas id="spectrum-waterfall"></canvas>
+        </div>
+        <div class="spectrum-panel" id="waterfall-events-panel" style="display:none">
+            <div class="spectrum-panel-title" id="waterfall-events-title">Segments</div>
+            <table class="wf-events-table" id="waterfall-events-table">
+                <thead><tr>
+                    <th>Time</th>
+                    <th>Callsigns</th>
+                    <th>Transcript</th>
+                    <th>dB</th>
+                </tr></thead>
+                <tbody id="waterfall-events-body"></tbody>
+            </table>
+            <div class="wf-events-empty" id="waterfall-events-empty" style="display:none">No segments in this cell.</div>
+        </div>
+        <button class="btn replay-btn" id="replay-demo-btn">Replay Demo</button>
+    </div>
+</div>
+
+<!-- JSON Payload Modal -->
+<div class="dialog-overlay" id="payload-overlay" style="display:none">
+    <div class="dialog" style="max-width:600px">
+        <div class="dialog-header">
+            <h3>Event Payload</h3>
+            <button class="dialog-close" id="payload-close">&times;</button>
+        </div>
+        <div class="dialog-body" style="padding:0">
+            <pre class="payload-json" id="payload-json"></pre>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn" id="payload-copy">Copy</button>
+            <button class="btn" id="payload-dismiss">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Feedback Dialog -->
+<div class="dialog-overlay" id="feedback-overlay" style="display:none">
+    <div class="dialog">
+        <div class="dialog-header">
+            <h3>Send Feedback</h3>
+            <button class="dialog-close" id="feedback-close">&times;</button>
+        </div>
+        <div class="dialog-body">
+            <div class="feedback-type-row">
+                <button class="feedback-type-btn selected" data-type="bug">Bug Report</button>
+                <button class="feedback-type-btn" data-type="feature">Feature Request</button>
+                <button class="feedback-type-btn" data-type="general">General Feedback</button>
+                <button class="feedback-type-btn" data-type="question">Question</button>
+            </div>
+            <input class="feedback-title-input" id="feedback-title" type="text" placeholder="Title (brief summary)" maxlength="120">
+            <textarea class="feedback-textarea" id="feedback-text" placeholder="Describe your feedback..." rows="5" maxlength="2000"></textarea>
+            <div class="feedback-char-count" id="feedback-char-count">0 / 2000</div>
+        </div>
+        <div class="dialog-footer">
+            <button class="btn" id="feedback-cancel">Cancel</button>
+            <button class="btn btn-primary" id="feedback-submit">Send</button>
+        </div>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

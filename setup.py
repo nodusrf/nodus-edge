@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# RELEASE: nodusrf/nodus-edge setup.py
 """
 NodusNet Edge Node Setup Wizard
 
@@ -40,18 +39,25 @@ USER_AGENT = "NodusNet-Setup/1.0 (+https://nodusrf.com; nodusrf@proton.me)"
 # Can be overridden via NODUSNET_ZIP_METRO_PATH env var (used by install-edge.sh)
 ZIP_METRO_PATH = Path(
     os.environ.get("NODUSNET_ZIP_METRO_PATH", "")
-    or str(Path(__file__).resolve().parent.parent / "recept/src/recept/data/zip_metro.json")
+    or str(Path(__file__).resolve().parent.parent / "src/nodus_edge/data/zip_metro.json")
 )
 
-# Offline 2m repeater bundle (fallback when RepeaterBook API is unavailable)
-REPEATERS_2M_PATH = Path(
-    os.environ.get("NODUSNET_REPEATERS_2M_PATH", "")
-    or str(Path(__file__).resolve().parent.parent / "recept/src/recept/data/repeaters_2m_us.json")
+# Offline repeater database (full RepeaterBook dataset, all bands)
+REPEATERS_PATH = Path(
+    os.environ.get("NODUSNET_REPEATERS_PATH", "")
+    or os.environ.get("NODUSNET_REPEATERS_2M_PATH", "")  # legacy env var
+    or str(Path(__file__).resolve().parent.parent / "src/nodus_edge/data/repeaters.json")
 )
 
 NATIONAL_SIMPLEX_2M_HZ = 146_520_000
+NATIONAL_SIMPLEX_70CM_HZ = 446_000_000
 DEFAULT_RADIUS_MILES = 50
 CORE_FREQ_COUNT = 10
+
+BAND_CONFIG = {
+    "2m":   {"low_mhz": 144.0, "high_mhz": 148.0, "simplex_hz": NATIONAL_SIMPLEX_2M_HZ, "label": "2m (VHF)"},
+    "70cm": {"low_mhz": 420.0, "high_mhz": 450.0, "simplex_hz": NATIONAL_SIMPLEX_70CM_HZ, "label": "70cm (UHF)"},
+}
 
 # RTL-SDR usable bandwidth (after FFT rolloff, ~90% of sample rate)
 RTLSDR_USABLE_BW_HZ = 2_160_000  # ~2.16 MHz usable from 2.4 Msps
@@ -181,56 +187,31 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
 # ---------------------------------------------------------------------------
 
 def ask_server_connection(args) -> dict:
-    """Ask whether to connect to NodusNet server."""
-    if args.non_interactive:
-        server = args.server or ""
-        token = args.api_key or ""
-        return {
-            "synapse_endpoint": server if server else "",
-            "synapse_auth_token": token,
-        }
+    """Auto-connect to NodusNet server. No user prompts needed.
 
-    print()
-    print(f"  {BOLD}Step 1: Server Connection{NC}")
-    print(f"  {'─' * 50}")
-    print()
+    Users can disconnect later via the dashboard if they want standalone mode.
+    """
+    server = (args.server or "https://api.nodusrf.com").rstrip("/")
+    token = args.api_key or ""
 
-    connected = prompt_yn("Are you connecting to the NodusNet server?")
-
-    if not connected:
-        info("Standalone mode: segments will be saved locally only.")
-        return {"synapse_endpoint": "", "synapse_auth_token": ""}
-
-    server = prompt(
-        "NodusNet server endpoint",
-        default="https://nodusrf.com",
-    )
-
-    # Normalize: strip trailing slash
-    server = server.rstrip("/")
-
-    # Test connectivity
+    # Test connectivity (informational only)
     try:
         req = Request(f"{server}/health")
         req.add_header("User-Agent", USER_AGENT)
         urlopen(req, timeout=5)
-        info(f"Connected to {server}")
+        info(f"Server: {server} (connected)")
     except Exception:
-        warn(f"Could not reach {server} — you can fix the endpoint in .env later.")
-
-    token = ""
-    has_key = prompt_yn("Do you have an API key?", default_yes=False)
-    if has_key:
-        token = prompt("API key")
+        info(f"Server: {server} (will connect when available)")
 
     return {
         "synapse_endpoint": server,
         "synapse_auth_token": token,
+        "rem_endpoint": server,
     }
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Location
+# Step 2: Location
 # ---------------------------------------------------------------------------
 
 def resolve_zip(zip_code: str) -> dict:
@@ -308,13 +289,18 @@ def ask_location(args, zip_metro: dict) -> dict:
         return loc
 
     print()
-    print(f"  {BOLD}Step 1: Location{NC}")
+    print(f"  {BOLD}Step 2: Location{NC}")
     print(f"  {'─' * 50}")
     print()
 
     zip_code = ""
     while True:
-        zip_code = prompt("What is your zip code?")
+        zip_code = prompt("What is your zip code? (or 'manual' for manual entry)")
+
+        if zip_code.lower() == "manual":
+            loc = ask_manual_location()
+            zip_code = ""
+            break
 
         if not ZIP_RE.match(zip_code):
             error("Zip code must be exactly 5 digits.")
@@ -346,17 +332,23 @@ def ask_location(args, zip_metro: dict) -> dict:
     default_metro = lookup_metro(zip_code, loc["city"], zip_metro)
     cbsa_source = " (CBSA)" if zip_code in zip_metro else ""
     print(f"  Your metro area will be: {BOLD}{default_metro}{NC}{cbsa_source} ({loc['city']}, {loc.get('state_abbrev', '')})")
-    if not prompt_yn("Is this correct?"):
-        error("Re-run setup with a different zip code, or edit .env after setup.")
-        sys.exit(1)
-    loc["metro"] = default_metro
+    choice = prompt("Is this correct? (y/n/custom metro name)", default="y")
+
+    if choice.lower() in ("y", "yes", ""):
+        loc["metro"] = default_metro
+    elif choice.lower() in ("n", "no"):
+        custom = prompt("Enter metro name")
+        loc["metro"] = slugify_city(custom)
+    else:
+        # They typed a custom metro name directly
+        loc["metro"] = slugify_city(choice)
 
     info(f"Metro: {loc['metro']}")
     return loc
 
 
 # ---------------------------------------------------------------------------
-# Step 2: Callsign
+# Step 3: Callsign
 # ---------------------------------------------------------------------------
 
 def ask_callsign(args) -> str:
@@ -365,7 +357,7 @@ def ask_callsign(args) -> str:
         return (args.callsign or "").upper()
 
     print()
-    print(f"  {BOLD}Step 2: Callsign{NC}")
+    print(f"  {BOLD}Step 3: Callsign{NC}")
     print(f"  {'─' * 50}")
     print()
 
@@ -394,62 +386,128 @@ def ask_callsign(args) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Node ID
+# Step 4: Node ID
 # ---------------------------------------------------------------------------
 
-def derive_node_id(callsign: str, metro: str) -> str:
-    """Derive node ID from callsign and metro."""
+def derive_node_id(callsign: str, metro: str, mode: str = "fm") -> str:
+    """Derive node ID from callsign, metro, and mode."""
     if callsign:
-        return f"{callsign.lower()}-fm-{metro}"
+        return f"{callsign.lower()}-{mode}-{metro}"
     else:
         seed = f"{socket.gethostname()}-{time.time()}"
         h = hashlib.sha256(seed.encode()).hexdigest()[:4]
-        return f"anon-fm-{metro}-{h}"
+        return f"anon-{mode}-{metro}-{h}"
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Repeater Discovery
+# Step 4b: Band Selection
 # ---------------------------------------------------------------------------
 
-def load_offline_repeaters() -> list:
-    """Load the bundled offline 2m repeater database."""
-    path = REPEATERS_2M_PATH
+def ask_band(args) -> tuple[str, list[str]]:
+    """Ask which mode/band to monitor.
+
+    Returns (mode, bands) where mode is 'fm' or 'aprs',
+    and bands is a list of band keys for FM mode.
+    """
+    raw = args.band.lower().strip()
+    if raw == "aprs":
+        return "aprs", []
+    elif raw == "both":
+        bands = ["2m", "70cm"]
+    elif raw in BAND_CONFIG:
+        bands = [raw]
+    else:
+        bands = ["2m"]
+
+    if args.non_interactive:
+        return "fm", bands
+
+    print()
+    print(f"  {BOLD}Step 4b: Mode Selection{NC}")
+    print(f"  {'─' * 50}")
+    print()
+    print(f"    [1] {BOLD}FM 2m{NC}    Voice repeater monitoring (VHF 144-148 MHz)")
+    print(f"    [2] {BOLD}FM 70cm{NC}  Voice repeater monitoring (UHF 420-450 MHz)")
+    print(f"    [3] {BOLD}FM Both{NC}  Voice on 2m + 70cm")
+    print(f"    [4] {BOLD}APRS{NC}     Packet data on 144.390 MHz (Direwolf decoder)")
+    print()
+
+    choice = prompt("Select mode", default="1")
+
+    if choice in ("2", "70cm", "70"):
+        return "fm", ["70cm"]
+    elif choice in ("3", "both"):
+        return "fm", ["2m", "70cm"]
+    elif choice in ("4", "aprs"):
+        return "aprs", []
+    return "fm", ["2m"]
+
+
+# ---------------------------------------------------------------------------
+# Step 5: Repeater Discovery
+# ---------------------------------------------------------------------------
+
+def load_offline_repeaters(bands: list[str] | None = None) -> list:
+    """Load the bundled repeater database and filter to FM on-air in selected bands."""
+    if bands is None:
+        bands = ["2m"]
+    path = REPEATERS_PATH
     if not path.exists():
         return []
     try:
         with open(path) as f:
             data = json.load(f)
-        return data.get("repeaters", [])
+        all_rptrs = data.get("repeaters", [])
+        # Build frequency ranges from selected bands
+        ranges = [(BAND_CONFIG[b]["low_mhz"], BAND_CONFIG[b]["high_mhz"]) for b in bands if b in BAND_CONFIG]
+        filtered = []
+        for r in all_rptrs:
+            try:
+                freq = float(r.get("Frequency", 0))
+            except (ValueError, TypeError):
+                continue
+            if not any(lo <= freq <= hi for lo, hi in ranges):
+                continue
+            if r.get("FM Analog") == "No":
+                continue
+            if r.get("Operational Status") not in ("On-air", ""):
+                continue
+            filtered.append(r)
+        return filtered
     except (json.JSONDecodeError, OSError):
         return []
 
 
 def fetch_repeaters(lat: float, lon: float, state_name: str,
-                    radius_miles: float = DEFAULT_RADIUS_MILES) -> tuple:
-    """Find 2m repeaters near location from bundled offline data.
+                    radius_miles: float = DEFAULT_RADIUS_MILES,
+                    bands: list[str] | None = None) -> tuple:
+    """Find FM repeaters near location from bundled offline data.
 
     Returns (repeaters_list, metadata_dict).
     """
+    if bands is None:
+        bands = ["2m"]
+    band_label = " + ".join(bands)
     metadata = {
         "center_lat": lat,
         "center_lon": lon,
         "radius_miles": radius_miles,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "source": "offline-bundle",
-        "band": "2m",
+        "bands": bands,
     }
 
     print()
-    info(f"Searching bundled repeater data for 2m repeaters within {radius_miles} miles...")
+    info(f"Searching bundled repeater data for {band_label} repeaters within {radius_miles} miles...")
 
-    all_repeaters = load_offline_repeaters()
+    all_repeaters = load_offline_repeaters(bands)
     if not all_repeaters:
         warn("Offline repeater database not found.")
-        warn(f"Looked in: {REPEATERS_2M_PATH}")
+        warn(f"Looked in: {REPEATERS_PATH}")
         metadata["total_repeaters"] = 0
         return [], metadata
 
-    info(f"Loaded {len(all_repeaters)} US 2m repeaters from offline database.")
+    info(f"Loaded {len(all_repeaters)} US {band_label} FM repeaters from offline database.")
 
     # Filter by distance
     nearby = []
@@ -481,14 +539,16 @@ def fetch_repeaters(lat: float, lon: float, state_name: str,
     return unique, metadata
 
 
-def split_frequencies(repeaters: list) -> tuple:
+def split_frequencies(repeaters: list, bands: list[str] | None = None) -> tuple:
     """Split repeaters into core and candidate frequency lists.
 
     Returns (core_hz, candidate_hz).
-    Core: national simplex + top 10 closest active repeaters.
+    Core: national simplex(es) + top 10 closest active repeaters.
     Candidate: remaining repeaters within radius.
     """
-    core_hz = [NATIONAL_SIMPLEX_2M_HZ]
+    if bands is None:
+        bands = ["2m"]
+    core_hz = [BAND_CONFIG[b]["simplex_hz"] for b in bands if b in BAND_CONFIG]
 
     # Filter to operational repeaters
     active = [r for r in repeaters
@@ -554,51 +614,26 @@ def check_bandwidth(frequencies: list, repeaters: list) -> tuple:
     return fits, span / 1_000_000, max_bw / 1_000_000, over_freqs
 
 
-def ask_repeaters(args, lat: float, lon: float, state_name: str) -> tuple:
+def ask_repeaters(args, lat: float, lon: float, state_name: str,
+                  bands: list[str] | None = None) -> tuple:
     """Fetch repeaters and get user confirmation.
 
     Returns (core_hz, candidate_hz, repeaters, metadata).
     """
+    if bands is None:
+        bands = ["2m"]
     radius = args.radius
+    band_label = " + ".join(bands)
 
     print()
-    print(f"  {BOLD}Step 3: Repeater Discovery{NC}")
+    print(f"  {BOLD}Step 5: Repeater Discovery{NC}")
     print(f"  {'─' * 50}")
 
-    # Band selection
-    if not args.non_interactive:
-        print()
-        print(f"    [1] {BOLD}2 Meter{NC} (144-148 MHz)")
-        print(f"    [2] {BOLD}70 Centimeter{NC} (420-450 MHz)")
-        print(f"    [3] {BOLD}1.25 Meter{NC} (222-225 MHz)")
-        print()
-        band_choice = prompt("Which band will you be monitoring?", default="1")
-    else:
-        band_choice = "1"
-
-    band_map = {"1": "2m", "2": "70cm", "3": "1.25m"}
-    selected_band = band_map.get(band_choice, "2m")
-
-    if selected_band != "2m":
-        warn(f"Offline repeater data for {selected_band} is not yet available.")
-        info("The national simplex frequency will be configured.")
-        info("Add repeater frequencies manually in .env after setup.")
-        # Return just simplex for the selected band
-        simplex_map = {"70cm": 446_000_000, "1.25m": 223_500_000}
-        simplex_hz = simplex_map.get(selected_band, NATIONAL_SIMPLEX_2M_HZ)
-        metadata = {
-            "center_lat": lat, "center_lon": lon,
-            "radius_miles": radius,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "source": "manual", "band": selected_band,
-        }
-        return [simplex_hz], [], [], metadata
-
-    repeaters, metadata = fetch_repeaters(lat, lon, state_name, radius)
-    core_hz, candidate_hz = split_frequencies(repeaters)
+    repeaters, metadata = fetch_repeaters(lat, lon, state_name, radius, bands)
+    core_hz, candidate_hz = split_frequencies(repeaters, bands)
 
     print()
-    info(f"Found {len(repeaters)} repeaters in the 2m band within {radius} miles.")
+    info(f"Found {len(repeaters)} repeaters in the {band_label} band within {radius} miles.")
     print()
 
     if core_hz:
@@ -607,7 +642,7 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str) -> tuple:
             freq_mhz = freq_hz / 1_000_000
             # Find matching repeater info
             label = ""
-            if freq_hz == NATIONAL_SIMPLEX_2M_HZ:
+            if freq_hz in (NATIONAL_SIMPLEX_2M_HZ, NATIONAL_SIMPLEX_70CM_HZ):
                 label = "National simplex"
             else:
                 for rptr in repeaters:
@@ -677,11 +712,11 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str) -> tuple:
                 info(f"Trimmed to {len(core_hz)} core frequencies within SDR bandwidth.")
             elif choice == "2":
                 info("Multi-dongle: configure the second dongle in .env after setup.")
-                info("Set RECEPT_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
+                info("Set NODUS_EDGE_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
 
     if not args.non_interactive:
         print()
-        if not prompt_yn("Accept these frequencies? (you can always change them later)"):
+        if not prompt_yn("Accept these frequencies?"):
             info("You can edit frequencies in the .env file after setup.")
 
     return core_hz, candidate_hz, repeaters, metadata
@@ -830,7 +865,7 @@ def ask_spectrum_assessment(
         print(f"  {GREEN}{BOLD}Unique coverage you'd add:{NC}")
         for fhz in unique_freqs[:5]:
             label = ""
-            if fhz == NATIONAL_SIMPLEX_2M_HZ:
+            if fhz in (NATIONAL_SIMPLEX_2M_HZ, NATIONAL_SIMPLEX_70CM_HZ):
                 label = "National simplex"
             else:
                 for rptr in repeaters:
@@ -883,7 +918,8 @@ def interactive_frequency_picker(
     print(f"  {'─' * 55}")
 
     # Build selectable list
-    selectable = [{"frequency_hz": NATIONAL_SIMPLEX_2M_HZ, "label": "National simplex", "distance": 0}]
+    simplex_freqs = [BAND_CONFIG[b]["simplex_hz"] for b in BAND_CONFIG]
+    selectable = [{"frequency_hz": f, "label": "National simplex", "distance": 0} for f in simplex_freqs if f in core_hz + candidate_hz]
 
     for rptr in repeaters:
         try:
@@ -945,7 +981,7 @@ def interactive_frequency_picker(
 
 
 # ---------------------------------------------------------------------------
-# Step 4: RTL-SDR Device Selection
+# Step 6: RTL-SDR Device Selection
 # ---------------------------------------------------------------------------
 
 def detect_rtlsdr_devices() -> list:
@@ -974,7 +1010,7 @@ def ask_sdr_device(args) -> dict:
         }
 
     print()
-    print(f"  {BOLD}Step 4: RTL-SDR Device{NC}")
+    print(f"  {BOLD}Step 6: RTL-SDR Device{NC}")
     print(f"  {'─' * 50}")
     print()
 
@@ -989,7 +1025,6 @@ def ask_sdr_device(args) -> dict:
     if len(devices) == 1:
         info(f"Found 1 RTL-SDR: {devices[0]}")
         device_index = 0
-        gain = 40
     else:
         info(f"Found {len(devices)} RTL-SDR devices:")
         for i, dev in enumerate(devices):
@@ -1004,7 +1039,7 @@ def ask_sdr_device(args) -> dict:
         except ValueError:
             device_index = 0
 
-        gain = prompt("RTL-SDR gain (0-49, or 'auto')", default="40")
+    gain = prompt("RTL-SDR gain (0-49, or 'auto')", default="40")
 
     return {
         "device_index": device_index,
@@ -1013,13 +1048,13 @@ def ask_sdr_device(args) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Step 5: RF Environment (Squelch)
+# Step 7: RF Environment (Squelch)
 # ---------------------------------------------------------------------------
 
 RF_PRESETS = {
-    "1": ("Urban / Noisy", "Near repeater sites, lots of RF", 40, 10.0),
-    "2": ("Suburban / Moderate", "Default, good balance", 30, 6.0),
-    "3": ("Rural / Quiet", "Weak signals, low noise floor", 20, 4.0),
+    "1": ("Urban / Noisy", "Near repeater sites, lots of RF", 25, 8.0),
+    "2": ("Suburban / Moderate", "Default, good balance", 15, 5.0),
+    "3": ("Rural / Quiet", "Weak signals, low noise floor", 8, 3.0),
 }
 
 
@@ -1093,13 +1128,13 @@ def classify_noise_floor(powers: list) -> dict:
     noise_floor = powers_sorted[idx_25]
 
     if noise_floor > -45:
-        sq, snr, label = 45, 12.0, "Very noisy"
+        sq, snr, label = 30, 10.0, "Very noisy"
     elif noise_floor > -55:
-        sq, snr, label = 40, 10.0, "Urban / Noisy"
+        sq, snr, label = 25, 8.0, "Urban / Noisy"
     elif noise_floor > -65:
-        sq, snr, label = 30, 6.0, "Suburban / Moderate"
+        sq, snr, label = 15, 5.0, "Suburban / Moderate"
     else:
-        sq, snr, label = 20, 4.0, "Rural / Quiet"
+        sq, snr, label = 8, 3.0, "Rural / Quiet"
 
     return {
         "noise_floor_db": round(noise_floor, 1),
@@ -1110,33 +1145,13 @@ def classify_noise_floor(powers: list) -> dict:
 
 
 def ask_rf_environment(args, sdr_config: dict | None = None) -> dict:
-    """Ask about RF environment to set squelch thresholds."""
-    # CLI override takes priority
-    if args.squelch is not None:
-        return {
-            "squelch_threshold": args.squelch,
-            "airband_squelch_snr_db": 6.0,
-        }
-
-    if args.non_interactive:
-        if getattr(args, "auto_squelch", False):
-            device_index = (sdr_config or {}).get("device_index", 0)
-            gain = (sdr_config or {}).get("gain", 40)
-            result = scan_noise_floor(device_index, str(gain))
-            if result:
-                return {
-                    "squelch_threshold": result["squelch_threshold"],
-                    "airband_squelch_snr_db": result["airband_squelch_snr_db"],
-                }
-        return {"squelch_threshold": 25, "airband_squelch_snr_db": 8.67}
-
-    info("Squelch: 25, SNR: 8.67 dB (default, adjustable in .env or dashboard)")
-
-    return {"squelch_threshold": 25, "airband_squelch_snr_db": 8.67}
+    """Set squelch defaults. No user prompt. Tunable via .env later."""
+    squelch = args.squelch if args.squelch is not None else 15
+    return {"squelch_threshold": squelch, "airband_squelch_snr_db": 5.0}
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Transcription (Whisper)
+# Step 8: Transcription (Whisper)
 # ---------------------------------------------------------------------------
 
 def is_raspberry_pi() -> bool:
@@ -1181,25 +1196,26 @@ def ask_whisper(args) -> str:
 
     if args.non_interactive:
         if pi_detected and args.whisper_url is None:
-            return "https://nodusrf.com/v1"
+            return "https://api.nodusrf.com/v1/edge/whisper"
         return args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
     print()
-    print(f"  {BOLD}Step 6: Transcription{NC}")
+    print(f"  {BOLD}Step 8: Transcription{NC}")
     print(f"  {'─' * 50}")
     print()
 
     if pi_detected:
-        url = args.whisper_url or "https://nodusrf.com/v1"
-        info("Raspberry Pi detected. Using NodusNet GPU pool for transcription.")
-        info(f"Whisper endpoint: {url}")
+        warn("Raspberry Pi detected — local Whisper is not supported.")
+        info("Using NodusNet cloud transcription via Gateway.")
+        print()
+        default_url = args.whisper_url or "https://api.nodusrf.com/v1/edge/whisper"
     else:
         default_url = args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
-        url = prompt(
-            "Whisper transcription endpoint",
-            default=default_url,
-        )
+    url = prompt(
+        "Whisper transcription endpoint",
+        default=default_url,
+    )
 
     if url:
         # Skip connectivity test for Docker internal DNS (container isn't running yet)
@@ -1215,75 +1231,93 @@ def ask_whisper(args) -> str:
             except Exception:
                 warn(f"Could not reach {url} — you can fix this in .env later.")
     else:
-        info("Transcription disabled. Set RECEPT_WHISPER_API_URL in .env to enable.")
+        info("Transcription disabled. Set NODUS_EDGE_WHISPER_API_URL in .env to enable.")
 
     return url
 
 
 # ---------------------------------------------------------------------------
-# Step 7: Generate Output
+# Step 9: Generate Output
 # ---------------------------------------------------------------------------
 
-ENV_TEMPLATE = """\
+ENV_TEMPLATE_FM = """\
 # NodusNet Edge Node Configuration
 # Generated by setup-edge.py on {generated_at}
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-RECEPT_MODE=fm
-RECEPT_NODE_ID={node_id}
-RECEPT_METRO={metro}
-RECEPT_CALLSIGN={callsign}
+NODUS_EDGE_MODE=fm
+NODUS_EDGE_NODE_ID={node_id}
+NODUS_EDGE_METRO={metro}
+NODUS_EDGE_CALLSIGN={callsign}
 
 # ---- Scanner ----
-RECEPT_FM_SCANNER_BACKEND=airband
-RECEPT_FM_CORE_FREQUENCIES={core_frequencies}
-RECEPT_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
-RECEPT_FM_RTL_DEVICE_INDEX={device_index}
-RECEPT_FM_GAIN={gain}
+NODUS_EDGE_FM_SCANNER_BACKEND=airband
+NODUS_EDGE_FM_CORE_FREQUENCIES={core_frequencies}
+NODUS_EDGE_FM_CANDIDATE_FREQUENCIES={candidate_frequencies}
+NODUS_EDGE_FM_RTL_DEVICE_INDEX={device_index}
+NODUS_EDGE_FM_GAIN={gain}
 # Squelch: raise if you get static-only recordings, lower if missing weak signals
-RECEPT_FM_SQUELCH_THRESHOLD={squelch_threshold}
-RECEPT_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
+NODUS_EDGE_FM_SQUELCH_THRESHOLD={squelch_threshold}
+NODUS_EDGE_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
 
-# ---- Upstream ----
-RECEPT_SYNAPSE_ENDPOINT={synapse_endpoint}
-RECEPT_SYNAPSE_AUTH_TOKEN={synapse_auth_token}
-RECEPT_DIAGNOSTICS_ENDPOINT={diagnostics_endpoint}
-RECEPT_REM_ENDPOINT={rem_endpoint}
+# ---- Server ----
+NODUSNET_SERVER={server}
+NODUSNET_TOKEN={token}
 
 # ---- Transcription ----
-RECEPT_WHISPER_API_URL={whisper_api_url}
-RECEPT_WHISPER_AUTH_TOKEN={whisper_auth_token}
-RECEPT_TRANSCRIPTION_ENABLED={transcription_enabled}
+NODUS_EDGE_WHISPER_API_URL={whisper_api_url}
+NODUS_EDGE_TRANSCRIPTION_ENABLED={transcription_enabled}
 WHISPER_MODEL={whisper_model}
 
 # ---- Logging ----
-RECEPT_LOG_LEVEL=INFO
+NODUS_EDGE_LOG_LEVEL=INFO
+"""
+
+ENV_TEMPLATE_APRS = """\
+# NodusNet Edge Node Configuration (APRS)
+# Generated by setup-edge.py on {generated_at}
+# Node: {node_id} | Metro: {metro}
+
+# ---- Identity ----
+NODUS_EDGE_MODE=aprs
+NODUS_EDGE_NODE_ID={node_id}
+NODUS_EDGE_METRO={metro}
+NODUS_EDGE_CALLSIGN={callsign}
+
+# ---- APRS ----
+NODUS_EDGE_APRS_FREQUENCY_HZ=144390000
+NODUS_EDGE_APRS_DEVICE_INDEX={device_index}
+
+# ---- Server ----
+NODUSNET_SERVER={server}
+NODUSNET_TOKEN={token}
+
+# ---- Logging ----
+NODUS_EDGE_LOG_LEVEL=INFO
 """
 
 
 def generate_env(output_dir: Path, config: dict) -> str:
     """Generate .env file content."""
-    # Diagnostics endpoint defaults to same base as Synapse
-    synapse_ep = config.get("synapse_endpoint", "")
-    diagnostics_ep = config.get("diagnostics_endpoint", "") or synapse_ep
-
-    return ENV_TEMPLATE.format(
+    common = dict(
         generated_at=datetime.now(timezone.utc).isoformat(),
         node_id=config["node_id"],
         metro=config["metro"],
         callsign=config.get("callsign", ""),
-        core_frequencies=json.dumps(config["core_frequencies"]),
-        candidate_frequencies=json.dumps(config["candidate_frequencies"]),
-        synapse_endpoint=synapse_ep,
-        synapse_auth_token=config.get("synapse_auth_token", ""),
-        diagnostics_endpoint=diagnostics_ep,
-        rem_endpoint=synapse_ep,
+        server=config.get("synapse_endpoint", ""),
+        token=config.get("synapse_auth_token", ""),
+        device_index=config.get("device_index", 0),
+    )
+    if config.get("mode") == "aprs":
+        return ENV_TEMPLATE_APRS.format(**common)
+    return ENV_TEMPLATE_FM.format(
+        **common,
+        core_frequencies=json.dumps(config.get("core_frequencies", [])),
+        candidate_frequencies=json.dumps(config.get("candidate_frequencies", [])),
         whisper_api_url=config.get("whisper_api_url", ""),
-        whisper_auth_token=config.get("whisper_auth_token", ""),
         transcription_enabled="true" if config.get("whisper_api_url") else "false",
         whisper_model=config.get("whisper_model", "base"),
-        device_index=config.get("device_index", 0),
         gain=config.get("gain", 40),
         squelch_threshold=config.get("squelch_threshold", 30),
         airband_squelch_snr_db=config.get("airband_squelch_snr_db", 6.0),
@@ -1293,17 +1327,21 @@ def generate_env(output_dir: Path, config: dict) -> str:
 def write_output(args, config: dict, repeaters: list, metadata: dict):
     """Write .env and repeaters.json to output directory."""
     output_dir = Path(args.output_dir)
+    is_aprs = config.get("mode") == "aprs"
 
     env_content = generate_env(output_dir, config)
-    repeaters_data = json.dumps({"metadata": metadata, "repeaters": repeaters}, indent=2)
 
     if args.dry_run:
         print()
         print(f"  {BOLD}[DRY-RUN] .env contents:{NC}")
         for line in env_content.splitlines():
             print(f"    {line}")
-        print()
-        print(f"  {BOLD}[DRY-RUN] repeaters.json:{NC} {len(repeaters)} repeaters")
+        if is_aprs:
+            print()
+            print(f"  {BOLD}[DRY-RUN] docker-compose.yml:{NC} rewritten for APRS (no Whisper)")
+        else:
+            print()
+            print(f"  {BOLD}[DRY-RUN] repeaters.json:{NC} {len(repeaters)} repeaters")
         return
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1312,9 +1350,40 @@ def write_output(args, config: dict, repeaters: list, metadata: dict):
     env_path.write_text(env_content)
     info(f"Created {env_path}")
 
-    rptr_path = output_dir / "repeaters.json"
-    rptr_path.write_text(repeaters_data)
-    info(f"Created {rptr_path}")
+    if is_aprs:
+        # Rewrite compose: remove whisper service and repeaters mount
+        compose_path = output_dir / "docker-compose.yml"
+        if compose_path.exists():
+            aprs_compose = (
+                "# NodusNet Edge — APRS mode (auto-generated)\n"
+                "services:\n"
+                "  nodus-edge:\n"
+                "    image: nodusrf/nodus-edge:${NODUS_EDGE_TAG:-latest}\n"
+                "    privileged: true\n"
+                "    devices:\n"
+                "      - /dev/bus/usb:/dev/bus/usb\n"
+                "    env_file: .env\n"
+                "    ports:\n"
+                '      - "8073:8073"\n'
+                "    volumes:\n"
+                "      - ./data:/data\n"
+                "      - ./.env:/app/.env\n"
+                "    restart: unless-stopped\n"
+                "    healthcheck:\n"
+                '      test: ["CMD", "python", "-c",'
+                ' "import urllib.request;'
+                " urllib.request.urlopen('http://localhost:8082/health')\"]\n"
+                "      interval: 30s\n"
+                "      timeout: 5s\n"
+                "      retries: 3\n"
+            )
+            compose_path.write_text(aprs_compose)
+            info(f"Rewrote {compose_path} for APRS mode (no Whisper)")
+    else:
+        repeaters_data = json.dumps({"metadata": metadata, "repeaters": repeaters}, indent=2)
+        rptr_path = output_dir / "repeaters.json"
+        rptr_path.write_text(repeaters_data)
+        info(f"Created {rptr_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1329,22 +1398,32 @@ def print_summary(config: dict, repeater_count: int, output_dir: str, dry_run: b
     print("=" * 60)
     print()
 
+    is_aprs = config.get("mode") == "aprs"
+    connection = "NodusNet (remote Synapse)" if config.get("synapse_endpoint") else "Standalone (local only)"
+
     print(f"  Node ID:       {BOLD}{config['node_id']}{NC}")
     print(f"  Metro:         {config['metro']} ({config['city']}, {config['state_abbrev']})")
     if config.get("callsign"):
         print(f"  Callsign:      {config['callsign']}")
     else:
         print(f"  Callsign:      (anonymous)")
+    print(f"  Mode:          {'APRS (144.390 MHz)' if is_aprs else 'FM voice'}")
+    print(f"  Connection:    {connection}")
     print()
-    print(f"  Core freqs:    {len(config['core_frequencies'])} (always monitored)")
-    print(f"  Candidate:     {len(config['candidate_frequencies'])} (promoted when active)")
-    print(f"  Repeaters:     {repeater_count} saved")
-    print()
+
+    if not is_aprs:
+        print(f"  Core freqs:    {len(config['core_frequencies'])} (always monitored)")
+        print(f"  Candidate:     {len(config['candidate_frequencies'])} (promoted when active)")
+        print(f"  Repeaters:     {repeater_count} saved")
+        print()
 
     if not dry_run:
         print(f"  Files created:")
         print(f"    .env            -> {Path(output_dir) / '.env'}")
-        print(f"    repeaters.json  -> {Path(output_dir) / 'repeaters.json'}")
+        if is_aprs:
+            print(f"    compose     -> {Path(output_dir) / 'docker-compose.yml'} (APRS, no Whisper)")
+        else:
+            print(f"    repeaters.json  -> {Path(output_dir) / 'repeaters.json'}")
         print()
         print(f"  Next steps:")
         print(f"    1. docker compose pull")
@@ -1385,6 +1464,8 @@ def parse_args() -> argparse.Namespace:
                         help="Auto-detect squelch by scanning noise floor (requires rtl_power)")
     parser.add_argument("--whisper-url", help="Whisper API URL")
     parser.add_argument("--output-dir", default=".", help="Output directory (default: current)")
+    parser.add_argument("--band", default="2m",
+                        help="Band selection: 2m, 70cm, both, or aprs (default: 2m)")
     parser.add_argument("--radius", type=float, default=DEFAULT_RADIUS_MILES,
                         help=f"Repeater search radius in miles (default: {DEFAULT_RADIUS_MILES})")
     parser.add_argument("--non-interactive", action="store_true",
@@ -1394,44 +1475,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _auto_enroll_rem(server_url: str, node_id: str, callsign: str, metro: str):
-    """Auto-enroll this node with REM. Warn but don't block on failure."""
-    url = f"{server_url.rstrip('/')}/v1/edge/signup"
-    payload = json.dumps({
-        "callsign": callsign or "",
-        "email": "",
-        "metro": metro,
-        "node_id": node_id,
-    }).encode()
-
-    try:
-        req = Request(url, data=payload, method="POST")
-        req.add_header("Content-Type", "application/json")
-        req.add_header("User-Agent", USER_AGENT)
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-        info(f"Enrolled with NodusNet ({data.get('node_id', node_id)})")
-    except HTTPError as e:
-        if e.code == 409:
-            # Already enrolled, that's fine
-            info(f"Node {node_id} already enrolled with NodusNet")
-        else:
-            warn(f"Could not enroll with NodusNet (HTTP {e.code}). Node will still work locally.")
-    except Exception:
-        warn("Could not reach NodusNet for enrollment. Node will still work locally.")
-
-
 def main():
     args = parse_args()
 
     # Banner
     print()
     print("=" * 60)
-    print(f"  {BOLD}NodusNet - Edge Node Setup{NC}")
+    print(f"  {BOLD}NodusNet Edge Node Setup{NC}")
     print("=" * 60)
     print()
-    print("  This wizard guides you through the setup of a NodusEdge node")
-    print("  (local capture of RF for the NodusNet ecosystem).")
+    print("  This wizard configures a new edge node for NodusNet.")
+    print("  Modes: FM voice monitoring or APRS packet data.")
 
     if args.dry_run:
         print()
@@ -1445,63 +1499,90 @@ def main():
         warn("zip_metro.json not found — metro will be derived from city name.")
         info("Run: python scripts/generate-zip-metro.py to build it.")
 
-    # Server connection (auto-configured, advanced users can edit .env)
-    if args.non_interactive:
-        server_config = ask_server_connection(args)
-    else:
-        server_url = "https://nodusrf.com"
-        server_config = {
-            "synapse_endpoint": server_url,
-            "synapse_auth_token": "",
-        }
+    # Step 1: Server connection
+    server_config = ask_server_connection(args)
 
-    # Step 1: Location
+    # Step 2: Location
     location = ask_location(args, zip_metro)
 
-    # Step 2: Callsign
+    # Step 3: Callsign
     callsign = ask_callsign(args)
 
-    # Node ID (derived silently)
-    node_id = derive_node_id(callsign, location["metro"])
+    # Step 4: Mode / band selection
+    mode, bands = ask_band(args)
 
-    # Auto-enroll with REM
-    if not args.non_interactive:
-        _auto_enroll_rem(server_config["synapse_endpoint"], node_id, callsign, location["metro"])
-
-    # Step 3: Repeater discovery
-    core_hz, candidate_hz, repeaters, metadata = ask_repeaters(
-        args, location["lat"], location["lon"], location["state"],
-    )
-
-    # Step 4: SDR device selection
-    sdr_config = ask_sdr_device(args)
-
-    # Step 5: RF environment (squelch)
-    rf_config = ask_rf_environment(args, sdr_config)
-
-    # Step 6: Whisper
-    whisper_url = ask_whisper(args)
-
-    # Build config
-    config = {
-        "node_id": node_id,
-        "metro": location["metro"],
-        "callsign": callsign,
-        "city": location["city"],
-        "state_abbrev": location.get("state_abbrev", ""),
-        "core_frequencies": core_hz,
-        "candidate_frequencies": candidate_hz,
-        "whisper_api_url": whisper_url,
-        "whisper_auth_token": server_config.get("synapse_auth_token", "") if "nodusrf.com" in (whisper_url or "") else "",
-        "device_index": sdr_config["device_index"],
-        "gain": sdr_config["gain"],
-        **rf_config,
-        **server_config,
-    }
-
-    # Step 7: Write output
+    # Step 4b: Node ID (uses mode for naming)
+    node_id = derive_node_id(callsign, location["metro"], mode)
     print()
-    print(f"  {BOLD}Step 7: Generate Configuration{NC}")
+    print(f"  {BOLD}Node Identity{NC}")
+    print(f"  {'─' * 50}")
+    print()
+    info(f"Your node ID: {BOLD}{node_id}{NC}")
+
+    if mode == "aprs":
+        # APRS mode: no repeaters, no whisper, no squelch
+        sdr_config = ask_sdr_device(args)
+
+        config = {
+            "mode": "aprs",
+            "node_id": node_id,
+            "metro": location["metro"],
+            "callsign": callsign,
+            "city": location["city"],
+            "state_abbrev": location.get("state_abbrev", ""),
+            "device_index": sdr_config["device_index"],
+            **server_config,
+        }
+        repeaters = []
+        metadata = {}
+    else:
+        # FM mode: full repeater + whisper pipeline
+        core_hz, candidate_hz, repeaters, metadata = ask_repeaters(
+            args, location["lat"], location["lon"], location["state"],
+            bands=bands,
+        )
+
+        # Spectrum coverage assessment (if connected to NodusNet)
+        server_url = server_config.get("synapse_endpoint", "")
+        gateway_url = server_config.get("gateway_url", "")
+        if not gateway_url and server_url:
+            gateway_url = server_url.rsplit("/v1", 1)[0] if "/v1" in server_url else server_url
+        if gateway_url:
+            core_hz, candidate_hz = ask_spectrum_assessment(
+                args,
+                server_url=gateway_url,
+                api_key=server_config.get("synapse_auth_token", ""),
+                metro=location["metro"],
+                node_id=node_id,
+                core_hz=core_hz,
+                candidate_hz=candidate_hz,
+                repeaters=repeaters,
+            )
+
+        sdr_config = ask_sdr_device(args)
+        rf_config = ask_rf_environment(args, sdr_config)
+        whisper_url = ask_whisper(args)
+
+        config = {
+            "mode": "fm",
+            "node_id": node_id,
+            "metro": location["metro"],
+            "callsign": callsign,
+            "city": location["city"],
+            "state_abbrev": location.get("state_abbrev", ""),
+            "core_frequencies": core_hz,
+            "candidate_frequencies": candidate_hz,
+            "whisper_api_url": whisper_url,
+            "whisper_auth_token": server_config.get("synapse_auth_token", "") if "nodusrf.com" in (whisper_url or "") or "nodusalert.ai" in (whisper_url or "") else "",
+            "device_index": sdr_config["device_index"],
+            "gain": sdr_config["gain"],
+            **rf_config,
+            **server_config,
+        }
+
+    # Write output
+    print()
+    print(f"  {BOLD}Generate Configuration{NC}")
     print(f"  {'─' * 50}")
     print()
 

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# RELEASE: nodusrf/nodus-edge nodusnet-updater.sh
 # NodusNet Edge Node — OTA Updater
 #
 # Pull-based update system: fetches version manifest from Gateway, pulls new
@@ -18,12 +17,29 @@ set -euo pipefail
 # Config
 # ---------------------------------------------------------------------------
 
-INSTALL_DIR="${NODUSNET_DIR:-$HOME/nodusnet}"
+INSTALL_DIR="${NODUSNET_DIR:-$HOME/nodusedge}"
 STATE_FILE="$INSTALL_DIR/.updater-state.json"
 LOCK_FILE="$INSTALL_DIR/.updater.lock"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.yml"
 LOG_FILE="$INSTALL_DIR/.updater.log"
 UPDATER_SCRIPT="$(realpath "${BASH_SOURCE[0]}")"
+
+# ---------------------------------------------------------------------------
+# One-time env var migration: old prefix -> NODUS_EDGE_*
+# String split prevents the sync rewrite from mangling this function.
+# ---------------------------------------------------------------------------
+
+_LEGACY_PREFIX="REC""EPT_"
+_CURRENT_PREFIX="NODUS_EDGE_"
+
+if [ -f "$INSTALL_DIR/.env" ] && grep -q "^${_LEGACY_PREFIX}" "$INSTALL_DIR/.env" 2>/dev/null; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Migrating .env: ${_LEGACY_PREFIX}* -> ${_CURRENT_PREFIX}*" | tee -a "${LOG_FILE:-/dev/null}"
+    cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.pre-migration"
+    sed -i "s/^${_LEGACY_PREFIX}/${_CURRENT_PREFIX}/" "$INSTALL_DIR/.env"
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Migration complete. Backup: .env.pre-migration" | tee -a "${LOG_FILE:-/dev/null}"
+fi
+
+unset _LEGACY_PREFIX _CURRENT_PREFIX
 
 # Gateway URL from .env or environment
 if [ -z "${NODUSNET_SERVER:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
@@ -38,10 +54,10 @@ fi
 NODUSNET_TOKEN="${NODUSNET_TOKEN:-}"
 
 # Node ID for status reporting
-if [ -z "${RECEPT_NODE_ID:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    RECEPT_NODE_ID="$(grep '^RECEPT_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "")"
+if [ -z "${EDGE_NODE_ID:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    EDGE_NODE_ID="$(grep '^NODUS_EDGE_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "")"
 fi
-RECEPT_NODE_ID="${RECEPT_NODE_ID:-unknown}"
+EDGE_NODE_ID="${EDGE_NODE_ID:-unknown}"
 
 FORCE=false
 for arg in "$@"; do
@@ -76,10 +92,10 @@ print(data if data else '')
 
 # Write JSON state file
 write_state() {
-    local recept_tag="$1" whisper_tag="$2" updater_ver="$3" compose_ver="$4"
+    local edge_tag="$1" whisper_tag="$2" updater_ver="$3" compose_ver="$4"
     cat > "$STATE_FILE" <<STATEEOF
 {
-  "nodus_edge_tag": "$recept_tag",
+  "nodus_edge_tag": "$edge_tag",
   "whisper_cpu_tag": "$whisper_tag",
   "updater_version": "$updater_ver",
   "compose_version": "$compose_ver",
@@ -97,9 +113,9 @@ report_status() {
     body=$(python3 -c "
 import json
 print(json.dumps({
-    'node_id': '$RECEPT_NODE_ID',
+    'node_id': '$EDGE_NODE_ID',
     'updater_version': '$UPDATER_VERSION',
-    'recept_fm_tag': '${NEW_RECEPT_TAG:-unknown}',
+    'recept_fm_tag': '${NEW_EDGE_TAG:-unknown}',
     'whisper_tag': '${NEW_WHISPER_TAG:-unknown}',
     'status': '$status',
     'error': '$error'
@@ -148,7 +164,7 @@ if [ -f "$LOG_FILE" ]; then
     tail -n 500 "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" || true
 fi
 
-log "--- Update check starting (node=$RECEPT_NODE_ID) ---"
+log "--- Update check starting (node=$EDGE_NODE_ID) ---"
 
 # ---------------------------------------------------------------------------
 # Step 1: Fetch manifest from Gateway
@@ -173,9 +189,9 @@ log "Manifest fetched successfully"
 # Step 2: Parse manifest and current state
 # ---------------------------------------------------------------------------
 
-NEW_RECEPT_TAG="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.tag")"
+NEW_EDGE_TAG="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.tag")"
 NEW_WHISPER_TAG="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.tag")"
-NEW_RECEPT_DIGEST="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.digest")"
+NEW_EDGE_DIGEST="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.digest")"
 NEW_WHISPER_DIGEST="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.digest")"
 MANIFEST_UPDATER_VER="$(json_get "$MANIFEST_TMP" ".updater.version")"
 MANIFEST_UPDATER_SHA="$(json_get "$MANIFEST_TMP" ".updater.sha256")"
@@ -183,13 +199,13 @@ MANIFEST_COMPOSE_VER="$(json_get "$MANIFEST_TMP" ".compose.version")"
 MANIFEST_COMPOSE_SHA="$(json_get "$MANIFEST_TMP" ".compose.sha256")"
 
 # Read current state
-CUR_RECEPT_TAG=""
+CUR_EDGE_TAG=""
 CUR_WHISPER_TAG=""
 CUR_UPDATER_VER=""
 CUR_COMPOSE_VER=""
 
 if [ -f "$STATE_FILE" ]; then
-    CUR_RECEPT_TAG="$(json_get "$STATE_FILE" ".nodus_edge_tag")"
+    CUR_EDGE_TAG="$(json_get "$STATE_FILE" ".nodus_edge_tag")"
     CUR_WHISPER_TAG="$(json_get "$STATE_FILE" ".whisper_cpu_tag")"
     CUR_UPDATER_VER="$(json_get "$STATE_FILE" ".updater_version")"
     CUR_COMPOSE_VER="$(json_get "$STATE_FILE" ".compose_version")"
@@ -260,19 +276,19 @@ fi
 
 IMAGES_CHANGED=false
 
-if [ "$NEW_RECEPT_TAG" != "$CUR_RECEPT_TAG" ] || [ "$NEW_WHISPER_TAG" != "$CUR_WHISPER_TAG" ] || $FORCE; then
+if [ "$NEW_EDGE_TAG" != "$CUR_EDGE_TAG" ] || [ "$NEW_WHISPER_TAG" != "$CUR_WHISPER_TAG" ] || $FORCE; then
     IMAGES_CHANGED=true
     if $FORCE; then
         log "Forced update — pulling images"
     else
-        log "Image tags changed: nodus-edge=$CUR_RECEPT_TAG->$NEW_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG->$NEW_WHISPER_TAG"
+        log "Image tags changed: nodus-edge=$CUR_EDGE_TAG->$NEW_EDGE_TAG whisper-cpu=$CUR_WHISPER_TAG->$NEW_WHISPER_TAG"
     fi
 fi
 
 if ! $IMAGES_CHANGED && ! $COMPOSE_UPDATED; then
     log "Everything up to date"
     # Still write state in case this is first run
-    write_state "$NEW_RECEPT_TAG" "$NEW_WHISPER_TAG" "$UPDATER_VERSION" "${MANIFEST_COMPOSE_VER:-$CUR_COMPOSE_VER}"
+    write_state "$NEW_EDGE_TAG" "$NEW_WHISPER_TAG" "$UPDATER_VERSION" "${MANIFEST_COMPOSE_VER:-$CUR_COMPOSE_VER}"
     exit 0
 fi
 
@@ -283,7 +299,7 @@ fi
 log "Pulling new images (existing containers stay up)..."
 
 # Export tags so docker compose can use ${NODUS_EDGE_TAG} and ${WHISPER_CPU_TAG}
-export NODUS_EDGE_TAG="$NEW_RECEPT_TAG"
+export NODUS_EDGE_TAG="$NEW_EDGE_TAG"
 export WHISPER_CPU_TAG="$NEW_WHISPER_TAG"
 
 if ! docker compose -f "$COMPOSE_FILE" pull 2>>"$LOG_FILE"; then
@@ -308,29 +324,29 @@ log "New images downloaded. Old containers still serving."
 # during this entire step.
 # ---------------------------------------------------------------------------
 
-CANARY_RECEPT="nodusnet-canary-recept"
+CANARY_EDGE="nodusnet-canary-edge"
 CANARY_WHISPER="nodusnet-canary-whisper"
-CANARY_RECEPT_PORT=18082   # health on alt port (prod is 8082)
+CANARY_EDGE_PORT=18082   # health on alt port (prod is 8082)
 CANARY_WHISPER_PORT=18000   # health on alt port (prod is 8000)
 
 # Cleanup helper — always remove canary containers
 cleanup_canaries() {
-    docker rm -f "$CANARY_RECEPT" "$CANARY_WHISPER" &>/dev/null || true
+    docker rm -f "$CANARY_EDGE" "$CANARY_WHISPER" &>/dev/null || true
 }
 trap 'cleanup_canaries; rm -f "$MANIFEST_TMP"' EXIT
 
-RECEPT_IMAGE="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.image"):$NEW_RECEPT_TAG"
+EDGE_IMAGE="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.image"):$NEW_EDGE_TAG"
 WHISPER_IMAGE="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.image"):$NEW_WHISPER_TAG"
 
-log "Canary pre-flight: testing $RECEPT_IMAGE"
+log "Canary pre-flight: testing $EDGE_IMAGE"
 
 # Start canary nodus-edge — no USB, alternate port, just verify it boots
 docker run -d --rm \
-    --name "$CANARY_RECEPT" \
-    -p "127.0.0.1:${CANARY_RECEPT_PORT}:8082" \
-    -e RECEPT_MODE=fm \
-    -e RECEPT_DRY_RUN=true \
-    "$RECEPT_IMAGE" 2>>"$LOG_FILE" || true
+    --name "$CANARY_EDGE" \
+    -p "127.0.0.1:${CANARY_EDGE_PORT}:8082" \
+    -e NODUS_EDGE_MODE=fm \
+    -e NODUS_EDGE_DRY_RUN=true \
+    "$EDGE_IMAGE" 2>>"$LOG_FILE" || true
 
 # Start canary whisper — alternate port, verify model loads
 docker run -d --rm \
@@ -347,13 +363,13 @@ CANARY_ELAPSED=0
 
 log "Waiting for canary health checks (${CANARY_MAX}s timeout)..."
 
-RECEPT_HEALTHY=false
+EDGE_HEALTHY=false
 WHISPER_HEALTHY=false
 
 while [ $CANARY_ELAPSED -lt $CANARY_MAX ]; do
-    if ! $RECEPT_HEALTHY; then
-        if curl -sf "http://127.0.0.1:${CANARY_RECEPT_PORT}/health" &>/dev/null; then
-            RECEPT_HEALTHY=true
+    if ! $EDGE_HEALTHY; then
+        if curl -sf "http://127.0.0.1:${CANARY_EDGE_PORT}/health" &>/dev/null; then
+            EDGE_HEALTHY=true
             log "  canary nodus-edge healthy (${CANARY_ELAPSED}s)"
         fi
     fi
@@ -365,13 +381,13 @@ while [ $CANARY_ELAPSED -lt $CANARY_MAX ]; do
         fi
     fi
 
-    if $RECEPT_HEALTHY && $WHISPER_HEALTHY; then
+    if $EDGE_HEALTHY && $WHISPER_HEALTHY; then
         break
     fi
 
     # Check if canary containers crashed
-    if ! docker ps -q -f "name=$CANARY_RECEPT" 2>/dev/null | grep -q .; then
-        if ! $RECEPT_HEALTHY; then
+    if ! docker ps -q -f "name=$CANARY_EDGE" 2>/dev/null | grep -q .; then
+        if ! $EDGE_HEALTHY; then
             log "  canary nodus-edge exited prematurely"
             CANARY_OK=false
             break
@@ -389,7 +405,7 @@ while [ $CANARY_ELAPSED -lt $CANARY_MAX ]; do
     CANARY_ELAPSED=$((CANARY_ELAPSED + 5))
 done
 
-if ! $RECEPT_HEALTHY || ! $WHISPER_HEALTHY; then
+if ! $EDGE_HEALTHY || ! $WHISPER_HEALTHY; then
     CANARY_OK=false
 fi
 
@@ -403,7 +419,7 @@ if ! $CANARY_OK; then
         cp "$COMPOSE_FILE.bak" "$COMPOSE_FILE"
     fi
     FAIL_DETAIL="canary failed:"
-    $RECEPT_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL nodus-edge"
+    $EDGE_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL nodus-edge"
     $WHISPER_HEALTHY || FAIL_DETAIL="$FAIL_DETAIL whisper"
     report_status "failed" "$FAIL_DETAIL"
     exit 1
@@ -462,7 +478,7 @@ done
 
 if $HEALTHY; then
     log "Update successful — production nodus-edge is healthy"
-    write_state "$NEW_RECEPT_TAG" "$NEW_WHISPER_TAG" "$UPDATER_VERSION" "${MANIFEST_COMPOSE_VER:-$CUR_COMPOSE_VER}"
+    write_state "$NEW_EDGE_TAG" "$NEW_WHISPER_TAG" "$UPDATER_VERSION" "${MANIFEST_COMPOSE_VER:-$CUR_COMPOSE_VER}"
     report_status "success"
     rm -f "$COMPOSE_FILE.bak"
 else
@@ -474,9 +490,9 @@ else
         cp "$COMPOSE_FILE.bak" "$COMPOSE_FILE"
     fi
 
-    if [ -n "$CUR_RECEPT_TAG" ] && [ -n "$CUR_WHISPER_TAG" ]; then
-        log "Rolling back to previous tags: nodus-edge=$CUR_RECEPT_TAG whisper-cpu=$CUR_WHISPER_TAG"
-        export NODUS_EDGE_TAG="$CUR_RECEPT_TAG"
+    if [ -n "$CUR_EDGE_TAG" ] && [ -n "$CUR_WHISPER_TAG" ]; then
+        log "Rolling back to previous tags: nodus-edge=$CUR_EDGE_TAG whisper-cpu=$CUR_WHISPER_TAG"
+        export NODUS_EDGE_TAG="$CUR_EDGE_TAG"
         export WHISPER_CPU_TAG="$CUR_WHISPER_TAG"
         docker compose -f "$COMPOSE_FILE" up -d 2>>"$LOG_FILE" || true
     fi
