@@ -157,9 +157,12 @@ class EdgeDaemon:
         )
         self.rem_checkin.start()
 
-        # Wire compliance token into Synapse publisher so segments carry it
+        # Wire compliance token into Synapse publisher and Whisper client
+        # so auth works even without a static NODUSNET_TOKEN
         if hasattr(self.pipeline, 'synapse_publisher') and self.pipeline.synapse_publisher:
             self.pipeline.synapse_publisher.rem_checkin = self.rem_checkin
+        if hasattr(self.pipeline, 'whisper') and self.pipeline.whisper:
+            self.pipeline.whisper.rem_checkin = self.rem_checkin
 
         # Wait for first check-in to complete so segments carry a token
         if not self.rem_checkin.first_checkin_done.wait(timeout=15):

@@ -37,9 +37,19 @@ class WhisperClient:
         self.base_url = (base_url or settings.whisper_api_url).rstrip('/')
         self.timeout = timeout or settings.whisper_timeout_seconds
         self.auth_token = auth_token or settings.whisper_auth_token
+        self.rem_checkin = None  # Set by main.py; used as Bearer fallback
         self._healthy: Optional[bool] = None
         self._last_health_check: Optional[float] = None
         self._health_check_interval = 60  # seconds
+
+    def _auth_headers(self) -> dict:
+        """Build auth headers, using compliance token as Bearer fallback."""
+        headers: dict[str, str] = {}
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+        elif self.rem_checkin and self.rem_checkin.compliance_token:
+            headers["Authorization"] = f"Bearer {self.rem_checkin.compliance_token}"
+        return headers
 
     def health_check(self, force: bool = False) -> bool:
         """
@@ -53,12 +63,9 @@ class WhisperClient:
                 return self._healthy or False
 
         try:
-            headers = {}
-            if self.auth_token:
-                headers["Authorization"] = f"Bearer {self.auth_token}"
             response = requests.get(
                 f"{self.base_url}/health",
-                headers=headers,
+                headers=self._auth_headers(),
                 timeout=5,
             )
             if response.status_code == 200:
@@ -140,16 +147,13 @@ class WhisperClient:
 
         for attempt in range(retries):
             try:
-                headers = {}
-                if self.auth_token:
-                    headers["Authorization"] = f"Bearer {self.auth_token}"
                 with open(audio_path, "rb") as f:
                     files = {"file": (audio_path.name, f, "audio/wav")}
                     response = requests.post(
                         url,
                         files=files,
                         params=params,
-                        headers=headers,
+                        headers=self._auth_headers(),
                         timeout=self.timeout,
                     )
 

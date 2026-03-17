@@ -47,12 +47,23 @@ class SynapsePublisher:
         Sends static auth token in Authorization (Gateway device auth) and
         compliance token in X-Compliance-Token (Synapse version gate).
         Both are needed when segments are proxied through Gateway.
+
+        When no static auth token is configured (NODUSNET_TOKEN not set),
+        the compliance token is used as the Bearer token so Gateway can
+        authenticate via REM JWT validation.
         """
         headers: dict[str, str] = {}
+        compliance = (
+            self.rem_checkin.compliance_token
+            if self.rem_checkin and self.rem_checkin.compliance_token
+            else None
+        )
         if self.auth_token:
             headers["Authorization"] = f"Bearer {self.auth_token}"
-        if self.rem_checkin and self.rem_checkin.compliance_token:
-            headers["X-Compliance-Token"] = self.rem_checkin.compliance_token
+        elif compliance:
+            headers["Authorization"] = f"Bearer {compliance}"
+        if compliance:
+            headers["X-Compliance-Token"] = compliance
         return headers
 
     @property
