@@ -10,8 +10,11 @@
 # Options:
 #   --dry-run    Preview without making changes
 #
+# Multi-dongle: run the installer again to add a second node. It detects
+# the existing install and offers to add a new instance alongside it.
+#
 # Prerequisites: Linux (x86_64 or arm64), internet access, RTL-SDR dongle
-# Installs to: ~/nodusedge/
+# Installs to: ~/nodusedge/ (or ~/nodusedge-<name>/ for additional instances)
 #
 # Refs #203
 
@@ -181,30 +184,111 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2b: Clean up existing installation (if any)
+# Step 2b: Existing installation — update or add new instance?
 # ---------------------------------------------------------------------------
+
+ADDING_NEW=false
+INSTANCE_NAME=""
+INSTANCE_INDEX=0
+DASHBOARD_PORT=8073
 
 EXISTING_COMPOSE="$INSTALL_DIR/docker-compose.yml"
 if [ -f "$EXISTING_COMPOSE" ] && command -v docker &>/dev/null; then
     step "Existing Installation Detected"
-    info "Found existing NodusNet at $INSTALL_DIR/"
-    info "Stopping old containers..."
+
+    EXISTING_NODE_ID="$(grep -E '^NODUS_EDGE_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "unknown")"
+    info "Found existing node: ${BOLD}${EXISTING_NODE_ID}${NC}"
+    echo ""
+    echo -e "  Are you ${BOLD}[u]pdating${NC} this node or ${BOLD}[a]dding${NC} a new one?"
+    echo ""
+
     if $DRY_RUN; then
-        info "[dry-run] docker compose -f $EXISTING_COMPOSE down"
+        info "[dry-run] Assuming update"
+        CHOICE="u"
     else
-        docker compose -f "$EXISTING_COMPOSE" down 2>/dev/null || true
-        info "Old containers stopped."
+        read -r -p "  Choice [u/a]: " CHOICE
     fi
 
-    # Back up .env so the wizard can offer to reuse settings
-    if [ -f "$INSTALL_DIR/.env" ]; then
-        if $DRY_RUN; then
-            info "[dry-run] Would back up .env to .env.bak"
-        else
-            cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak"
-            info "Backed up existing .env to .env.bak"
-        fi
-    fi
+    case "$CHOICE" in
+        a|A|add)
+            ADDING_NEW=true
+
+            # Count existing instances to determine device index
+            for d in "$HOME"/nodusedge*/; do
+                [ -f "$d/docker-compose.yml" ] && INSTANCE_INDEX=$((INSTANCE_INDEX + 1))
+            done
+
+            echo ""
+            read -r -p "  Give this instance a short name (e.g., 70cm, uhf, 2m): " INSTANCE_NAME
+            # Sanitize: lowercase, replace spaces with dashes, strip non-alphanumeric
+            INSTANCE_NAME="$(echo "$INSTANCE_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
+
+            if [ -z "$INSTANCE_NAME" ]; then
+                INSTANCE_NAME="$INSTANCE_INDEX"
+            fi
+
+            INSTALL_DIR="$HOME/nodusedge-${INSTANCE_NAME}"
+
+            if [ -d "$INSTALL_DIR" ]; then
+                die "Directory $INSTALL_DIR already exists. Choose a different name or remove it first."
+            fi
+
+            DASHBOARD_PORT=$((8073 + INSTANCE_INDEX))
+
+            echo ""
+            info "Install directory: ${BOLD}$INSTALL_DIR/${NC}"
+            info "SDR device index:  ${BOLD}$INSTANCE_INDEX${NC}"
+            info "Dashboard port:    ${BOLD}$DASHBOARD_PORT${NC}"
+
+            # Check RTL-SDR dongle count (best-effort)
+            NEEDED=$((INSTANCE_INDEX + 1))
+            RTL_COUNT=0
+            if command -v rtl_test &>/dev/null; then
+                RTL_COUNT=$(timeout 2 rtl_test 2>&1 | grep -oP 'Found \K\d+' || echo "0")
+            elif command -v lsusb &>/dev/null; then
+                RTL_COUNT=$(lsusb 2>/dev/null | grep -cE '0bda:(2838|2832)' || echo "0")
+            fi
+            if [ "$RTL_COUNT" -gt 0 ] && [ "$RTL_COUNT" -lt "$NEEDED" ]; then
+                echo ""
+                warn "Only $RTL_COUNT RTL-SDR dongle(s) detected, but you need $NEEDED."
+                warn "Make sure all dongles are plugged in before starting the containers."
+            fi
+
+            # Check for duplicate RTL-SDR serials (best-effort)
+            if command -v rtl_test &>/dev/null; then
+                SERIAL_LIST=$(timeout 2 rtl_test 2>&1 | grep -oP 'SN:\s*\K\S+' || true)
+                DUPE_SERIALS=$(echo "$SERIAL_LIST" | sort | uniq -d)
+                if [ -n "$DUPE_SERIALS" ]; then
+                    echo ""
+                    warn "Your RTL-SDR dongles have duplicate serial numbers!"
+                    warn "This can cause them to swap positions after a reboot."
+                    warn "Fix: unplug both, then for each dongle run:"
+                    warn "  rtl_eeprom -s 00000001   (first dongle)"
+                    warn "  rtl_eeprom -s 00000002   (second dongle)"
+                fi
+            fi
+            ;;
+        *)
+            # Update flow — existing behavior
+            info "Updating existing node..."
+            info "Stopping old containers..."
+            if $DRY_RUN; then
+                info "[dry-run] docker compose -f $EXISTING_COMPOSE down"
+            else
+                docker compose -f "$EXISTING_COMPOSE" down 2>/dev/null || true
+                info "Old containers stopped."
+            fi
+
+            if [ -f "$INSTALL_DIR/.env" ]; then
+                if $DRY_RUN; then
+                    info "[dry-run] Would back up .env to .env.bak"
+                else
+                    cp "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.bak"
+                    info "Backed up existing .env to .env.bak"
+                fi
+            fi
+            ;;
+    esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -262,7 +346,11 @@ fi
 # Step 4: Download files + prepare install directory
 # ---------------------------------------------------------------------------
 
-step "Step 4: Prepare ~/nodusedge/"
+if $ADDING_NEW; then
+    step "Step 4: Prepare ~/nodusedge-${INSTANCE_NAME}/"
+else
+    step "Step 4: Prepare ~/nodusedge/"
+fi
 
 run mkdir -p "$INSTALL_DIR/data"
 
@@ -298,6 +386,11 @@ else
     fi
     rm -f "$COMPOSE_DST.tmp2"
 
+    # For additional instances, remap the dashboard port so both can run
+    if $ADDING_NEW && [ "$DASHBOARD_PORT" -ne 8073 ]; then
+        sed -i "s/\"8073:8073\"/\"${DASHBOARD_PORT}:8073\"/" "$COMPOSE_DST"
+    fi
+
     # Setup wizard
     resolve_file "setup.py" "$WIZARD_PATH" "setup wizard"
 
@@ -322,6 +415,12 @@ else
 
     WIZARD_ARGS=(--output-dir "$INSTALL_DIR")
 
+    # For additional instances, pass suffix and device index to wizard
+    if $ADDING_NEW; then
+        WIZARD_ARGS+=(--instance-suffix "$INSTANCE_NAME")
+        WIZARD_ARGS+=(--sdr-device "$INSTANCE_INDEX")
+    fi
+
     # Append any wizard args forwarded from the command line
     WIZARD_ARGS+=("${WIZARD_EXTRA_ARGS[@]}")
 
@@ -342,6 +441,15 @@ if ! $DRY_RUN; then
     if [ ! -f "$INSTALL_DIR/.env" ]; then
         die "Setup wizard did not create $INSTALL_DIR/.env — something went wrong."
     fi
+
+    # Ensure repeaters.json exists for docker-compose bind mount.
+    # The wizard should write it, but if it failed mid-run, fall back to
+    # the raw bundled database so Docker doesn't create a directory placeholder.
+    if [ ! -f "$INSTALL_DIR/repeaters.json" ] && [ -f "$INSTALL_DIR/.repeaters.json" ]; then
+        cp "$INSTALL_DIR/.repeaters.json" "$INSTALL_DIR/repeaters.json"
+        info "Created repeaters.json from bundled database (wizard may not have written it)"
+    fi
+
     info "Configuration files ready in $INSTALL_DIR/"
 fi
 
@@ -372,6 +480,17 @@ else
         docker compose -f "$COMPOSE_DST" pull
     fi
 
+    # Capture image digest for REM compliance check-in
+    EDGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' nodusrf/nodus-edge:latest 2>/dev/null | cut -d@ -f2 || echo "")"
+    if [ -n "$EDGE_DIGEST" ]; then
+        # Remove stale digest line if present, then append
+        sed -i '/^NODUS_IMAGE_DIGEST=/d' "$INSTALL_DIR/.env"
+        echo "NODUS_IMAGE_DIGEST=$EDGE_DIGEST" >> "$INSTALL_DIR/.env"
+        info "Image digest recorded for REM compliance"
+    else
+        warn "Could not read image digest — REM check-in will fail until set"
+    fi
+
     info "Starting containers..."
     docker compose -f "$COMPOSE_DST" up -d $COMPOSE_EXTRA_ARGS
 fi
@@ -384,6 +503,13 @@ fi
 
 UPDATER_PATH="$INSTALL_DIR/nodusnet-updater.sh"
 
+# Instance-specific unit names so multiple instances don't overwrite each other
+if $ADDING_NEW; then
+    UNIT_SUFFIX="-${INSTANCE_NAME}"
+else
+    UNIT_SUFFIX=""
+fi
+
 if $DRY_RUN; then
     info "[dry-run] Would install auto-updater"
 else
@@ -395,9 +521,9 @@ else
         UNIT_DIR="$HOME/.config/systemd/user"
         mkdir -p "$UNIT_DIR"
 
-        cat > "$UNIT_DIR/nodusnet-updater.service" <<SVCEOF
+        cat > "$UNIT_DIR/nodusnet-updater${UNIT_SUFFIX}.service" <<SVCEOF
 [Unit]
-Description=NodusNet Auto-Updater
+Description=NodusNet Auto-Updater${UNIT_SUFFIX:+ ($INSTANCE_NAME)}
 
 [Service]
 Type=oneshot
@@ -406,9 +532,9 @@ Environment=HOME=$HOME
 WorkingDirectory=$INSTALL_DIR
 SVCEOF
 
-        cat > "$UNIT_DIR/nodusnet-updater.timer" <<TMREOF
+        cat > "$UNIT_DIR/nodusnet-updater${UNIT_SUFFIX}.timer" <<TMREOF
 [Unit]
-Description=NodusNet Auto-Update Check (every 5 min)
+Description=NodusNet Auto-Update Check${UNIT_SUFFIX:+ ($INSTANCE_NAME)} (every 5 min)
 
 [Timer]
 OnBootSec=60
@@ -420,12 +546,14 @@ WantedBy=timers.target
 TMREOF
 
         systemctl --user daemon-reload 2>/dev/null || true
-        systemctl --user enable --now nodusnet-updater.timer 2>/dev/null || true
+        systemctl --user enable --now "nodusnet-updater${UNIT_SUFFIX}.timer" 2>/dev/null || true
         loginctl enable-linger "$USER" 2>/dev/null || true
     else
-        # Fallback to cron
+        # Fallback to cron — use path-specific line so multiple instances coexist
         CRON_LINE="*/5 * * * * $UPDATER_PATH >> $INSTALL_DIR/.updater.log 2>&1"
-        (crontab -l 2>/dev/null | grep -v "nodusnet-updater"; echo "$CRON_LINE") | crontab - 2>/dev/null || true
+        if ! crontab -l 2>/dev/null | grep -qF "$UPDATER_PATH"; then
+            (crontab -l 2>/dev/null; echo "$CRON_LINE") | crontab - 2>/dev/null || true
+        fi
     fi
 fi
 
@@ -442,7 +570,7 @@ else
         UNIT_DIR="$HOME/.config/systemd/user"
         mkdir -p "$UNIT_DIR"
 
-        cat > "$UNIT_DIR/nodusnet-restart.path" <<PATHEOF
+        cat > "$UNIT_DIR/nodusnet-restart${UNIT_SUFFIX}.path" <<PATHEOF
 [Path]
 PathModified=$INSTALL_DIR/data/.restart-signal
 
@@ -450,9 +578,9 @@ PathModified=$INSTALL_DIR/data/.restart-signal
 WantedBy=default.target
 PATHEOF
 
-        cat > "$UNIT_DIR/nodusnet-restart.service" <<RSTEOF
+        cat > "$UNIT_DIR/nodusnet-restart${UNIT_SUFFIX}.service" <<RSTEOF
 [Unit]
-Description=NodusNet Edge Restart (triggered by dashboard)
+Description=NodusNet Edge Restart${UNIT_SUFFIX:+ ($INSTANCE_NAME)} (triggered by dashboard)
 
 [Service]
 Type=oneshot
@@ -462,7 +590,7 @@ ExecStartPost=rm -f $INSTALL_DIR/data/.restart-signal
 RSTEOF
 
         systemctl --user daemon-reload 2>/dev/null || true
-        systemctl --user enable --now nodusnet-restart.path 2>/dev/null || true
+        systemctl --user enable --now "nodusnet-restart${UNIT_SUFFIX}.path" 2>/dev/null || true
     else
         true  # no systemd user session, skip silently
     fi
@@ -530,19 +658,34 @@ NODE_ID="$(grep -E '^(RECEPT_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2
 
 echo ""
 echo "============================================================"
-echo -e "  ${GREEN}${BOLD}NodusNet Edge Node — Installed!${NC}"
+if $ADDING_NEW; then
+    echo -e "  ${GREEN}${BOLD}NodusNet Edge Node — Added!${NC}"
+else
+    echo -e "  ${GREEN}${BOLD}NodusNet Edge Node — Installed!${NC}"
+fi
 echo "============================================================"
 echo ""
 echo -e "  Node:          ${BOLD}${NODE_ID}${NC}"
 echo "  Install dir:   $INSTALL_DIR/"
+echo -e "  Dashboard:     ${BOLD}http://localhost:${DASHBOARD_PORT}${NC}"
 echo ""
-echo -e "  ${BOLD}Dashboard:${NC}   http://localhost:8073"
 echo -e "  ${BOLD}Logs:${NC}        cd $INSTALL_DIR && docker compose logs -f"
 echo -e "  ${BOLD}Stop:${NC}        cd $INSTALL_DIR && docker compose down"
 echo -e "  ${BOLD}Restart:${NC}     cd $INSTALL_DIR && docker compose up -d"
 echo -e "  ${BOLD}Status:${NC}      cd $INSTALL_DIR && docker compose ps"
 echo -e "  ${BOLD}Update now:${NC}  $INSTALL_DIR/nodusnet-updater.sh"
 echo ""
+if $ADDING_NEW; then
+    # List all running instances
+    echo -e "  ${BOLD}All instances:${NC}"
+    for d in "$HOME"/nodusedge*/; do
+        [ -f "$d/.env" ] || continue
+        INST_NODE="$(grep -E '^NODUS_EDGE_NODE_ID=' "$d/.env" 2>/dev/null | cut -d= -f2 || echo "?")"
+        INST_PORT="$(grep -oP '"\K\d+(?=:8073")' "$d/docker-compose.yml" 2>/dev/null || echo "8073")"
+        echo "    $INST_NODE  →  :$INST_PORT  ($d)"
+    done
+    echo ""
+fi
 echo -e "  ${DIM}GPU Whisper? Edit .env, set WHISPER_API_URL endpoint, then:${NC}"
 echo -e "  ${DIM}cd $INSTALL_DIR && docker compose up -d --scale whisper=0${NC}"
 echo ""

@@ -211,6 +211,7 @@ def ask_server_connection(args) -> dict:
     Users can disconnect later via the dashboard if they want standalone mode.
     """
     server = (args.server or "https://api.nodusrf.com").rstrip("/")
+    api_key = getattr(args, "api_key", None) or ""
 
     # Test connectivity (informational only)
     try:
@@ -221,8 +222,14 @@ def ask_server_connection(args) -> dict:
     except Exception:
         info(f"Server: {server} (will connect when available)")
 
+    if api_key:
+        info("API key: configured")
+    else:
+        info("API key: none (will use REM compliance token)")
+
     return {
         "synapse_endpoint": server,
+        "synapse_auth_token": api_key,
         "rem_endpoint": server,
     }
 
@@ -734,8 +741,7 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str,
         print(f"  These are the frequencies your node will monitor.")
         print(f"  You can edit them in the .env file later if needed.")
         print()
-        if not prompt_yn("Accept these frequencies?"):
-            info("Continuing anyway. Edit .env after setup to change them.")
+        time.sleep(5)
 
     return core_hz, candidate_hz, repeaters, metadata
 
@@ -1211,10 +1217,11 @@ def is_raspberry_pi() -> bool:
 
 def ask_whisper(args) -> str:
     """Ask for Whisper transcription endpoint."""
-    pi_detected = is_raspberry_pi()
+    import platform
+    is_arm = platform.machine() in ("aarch64", "armv7l")
 
     if args.non_interactive:
-        if pi_detected and args.whisper_url is None:
+        if is_arm and args.whisper_url is None:
             return "https://api.nodusrf.com/v1/edge/whisper"
         return args.whisper_url if args.whisper_url is not None else "http://whisper:8000"
 
@@ -1224,25 +1231,14 @@ def ask_whisper(args) -> str:
     print(f"  Whisper converts radio audio to text.")
     print()
 
-    if pi_detected:
-        warn("Raspberry Pi detected — local Whisper is not supported.")
-        info("Using NodusNet cloud transcription.")
-        url = args.whisper_url or "https://api.nodusrf.com/v1/edge/whisper"
-    elif args.whisper_url is not None:
+    if args.whisper_url is not None:
         url = args.whisper_url
+    elif is_arm:
+        url = "https://api.nodusrf.com/v1/edge/whisper"
+        info("ARM detected. Using NodusNet cloud transcription.")
     else:
-        print(f"    [1] {BOLD}Local{NC}     Built-in Whisper container (runs on this machine)")
-        print(f"    [2] {BOLD}NodusNet{NC}  Use NodusNet cloud transcription")
-        print()
-
-        choice = prompt("Enter 1 or 2", default="1")
-
-        if choice == "2":
-            url = "https://api.nodusrf.com/v1/edge/whisper"
-            info("Using NodusNet cloud transcription.")
-        else:
-            url = "http://whisper:8000"
-            info("Using local Whisper container.")
+        url = "http://whisper:8000"
+        info("Using local Whisper container.")
 
     if url and "://whisper:" not in url:
         try:
@@ -1283,6 +1279,7 @@ NODUS_EDGE_FM_AIRBAND_SQUELCH_SNR_DB={airband_squelch_snr_db}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
+NODUSNET_TOKEN={server_token}
 
 # ---- Transcription ----
 NODUS_EDGE_WHISPER_API_URL={whisper_api_url}
@@ -1310,6 +1307,7 @@ NODUS_EDGE_FM_RTL_DEVICE_INDEX={device_index}
 
 # ---- Server ----
 NODUSNET_SERVER={server}
+NODUSNET_TOKEN={server_token}
 
 # ---- Logging ----
 NODUS_EDGE_LOG_LEVEL=INFO
@@ -1324,6 +1322,7 @@ def generate_env(output_dir: Path, config: dict) -> str:
         metro=config["metro"],
         callsign=config.get("callsign", ""),
         server=config.get("synapse_endpoint", ""),
+        server_token=config.get("synapse_auth_token", ""),
         device_index=config.get("device_index", 0),
     )
     if config.get("mode") == "aprs":
@@ -1487,6 +1486,9 @@ def parse_args() -> argparse.Namespace:
                         help=f"Repeater search radius in miles (default: {DEFAULT_RADIUS_MILES})")
     parser.add_argument("--non-interactive", action="store_true",
                         help="Skip all prompts, use defaults + args")
+    parser.add_argument("--instance-suffix",
+                        help="Suffix for node ID (e.g., '70cm' makes node-id-70cm). "
+                             "Used by the installer for multi-dongle setups.")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print config without writing files")
     return parser.parse_args()
@@ -1530,11 +1532,42 @@ def main():
 
     # Step 4b: Node ID (uses mode for naming)
     node_id = derive_node_id(callsign, location["metro"], mode)
+
+    # Multi-instance: append suffix to node ID (e.g., "kk7qpz-fm-medford-70cm")
+    if getattr(args, "instance_suffix", None):
+        node_id = f"{node_id}-{args.instance_suffix}"
+
     print()
     print(f"  {BOLD}Node Identity{NC}")
     print(f"  {'─' * 50}")
     print()
     info(f"Your node ID: {BOLD}{node_id}{NC}")
+
+    # Enroll with REM (register device for fleet management)
+    server_url = server_config.get("synapse_endpoint", "").rstrip("/")
+    if server_url:
+        try:
+            signup_body = json.dumps({
+                "node_id": node_id,
+                "callsign": callsign,
+                "metro": location["metro"],
+                "email": "",
+            }).encode()
+            req = Request(
+                f"{server_url}/v1/signup",
+                data=signup_body,
+                headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
+                method="POST",
+            )
+            resp = urlopen(req, timeout=10)
+            info("Enrolled with NodusNet")
+        except HTTPError as e:
+            if e.code == 409:
+                info("Node already enrolled")
+            else:
+                warn(f"REM enrollment failed (HTTP {e.code}). Node will enroll on first check-in.")
+        except Exception:
+            warn("Could not reach REM for enrollment. Node will enroll on first check-in.")
 
     if mode == "aprs":
         # APRS mode: no repeaters, no whisper, no squelch
