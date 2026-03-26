@@ -206,7 +206,7 @@ if [ -f "$EXISTING_COMPOSE" ] && command -v docker &>/dev/null; then
         info "[dry-run] Assuming update"
         CHOICE="u"
     else
-        read -r -p "  Choice [u/a]: " CHOICE
+        read -r -p "  Choice [u/a]: " CHOICE </dev/tty
     fi
 
     case "$CHOICE" in
@@ -219,7 +219,7 @@ if [ -f "$EXISTING_COMPOSE" ] && command -v docker &>/dev/null; then
             done
 
             echo ""
-            read -r -p "  Give this instance a short name (e.g., 70cm, uhf, 2m): " INSTANCE_NAME
+            read -r -p "  Give this instance a short name (e.g., 70cm, uhf, 2m): " INSTANCE_NAME </dev/tty
             # Sanitize: lowercase, replace spaces with dashes, strip non-alphanumeric
             INSTANCE_NAME="$(echo "$INSTANCE_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')"
 
