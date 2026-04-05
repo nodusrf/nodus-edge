@@ -1583,6 +1583,7 @@ def main():
     info(f"Your node ID: {BOLD}{node_id}{NC}")
 
     # Enroll with REM (register device for fleet management)
+    api_token = ""
     server_url = server_config.get("synapse_endpoint", "").rstrip("/")
     if server_url:
         try:
@@ -1599,7 +1600,12 @@ def main():
                 method="POST",
             )
             resp = urlopen(req, timeout=10)
+            resp_data = json.loads(resp.read().decode())
+            api_token = resp_data.get("api_token", "")
             info("Enrolled with NodusNet")
+            if api_token:
+                server_config["synapse_auth_token"] = api_token
+                info("API token received")
         except HTTPError as e:
             if e.code == 409:
                 info("Node already enrolled")
