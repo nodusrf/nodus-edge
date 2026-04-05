@@ -55,6 +55,28 @@ NATIONAL_SIMPLEX_70CM_HZ = 446_000_000
 DEFAULT_RADIUS_MILES = 50
 CORE_FREQ_COUNT = 10
 
+# GMRS/FRS channels on 462 MHz (Ch 1-7 main, Ch 15-22 interstitial)
+# All 15 channels span 175 kHz — fits easily in one RTL-SDR dongle.
+# FRS Ch 8-14 (467 MHz) are omitted: the 5.16 MHz gap to 462 exceeds
+# the 2.16 MHz usable SDR bandwidth. Those need a second dongle.
+GMRS_CHANNELS_HZ = [
+    462_550_000,  # Ch 15
+    462_562_500,  # Ch 1
+    462_575_000,  # Ch 16
+    462_587_500,  # Ch 2
+    462_600_000,  # Ch 17
+    462_612_500,  # Ch 3
+    462_625_000,  # Ch 18
+    462_637_500,  # Ch 4
+    462_650_000,  # Ch 19
+    462_662_500,  # Ch 5
+    462_675_000,  # Ch 20
+    462_687_500,  # Ch 6
+    462_700_000,  # Ch 21
+    462_712_500,  # Ch 7
+    462_725_000,  # Ch 22
+]
+
 BAND_CONFIG = {
     "2m":   {"low_mhz": 144.0, "high_mhz": 148.0, "simplex_hz": NATIONAL_SIMPLEX_2M_HZ, "label": "2m (VHF)"},
     "70cm": {"low_mhz": 420.0, "high_mhz": 450.0, "simplex_hz": NATIONAL_SIMPLEX_70CM_HZ, "label": "70cm (UHF)"},
@@ -426,12 +448,14 @@ def derive_node_id(callsign: str, metro: str, mode: str = "fm") -> str:
 def ask_band(args) -> tuple[str, list[str]]:
     """Ask which mode/band to monitor.
 
-    Returns (mode, bands) where mode is 'fm' or 'aprs',
+    Returns (mode, bands) where mode is 'fm', 'aprs', or 'gmrs',
     and bands is a list of band keys for FM mode.
     """
     raw = args.band.lower().strip()
     if raw == "aprs":
         return "aprs", []
+    elif raw == "gmrs":
+        return "gmrs", []
     elif raw == "both":
         bands = ["2m", "70cm"]
     elif raw in BAND_CONFIG:
@@ -440,6 +464,8 @@ def ask_band(args) -> tuple[str, list[str]]:
         bands = ["2m"]
 
     if args.non_interactive:
+        if raw == "gmrs":
+            return "gmrs", []
         return "fm", bands
 
     print()
@@ -447,13 +473,14 @@ def ask_band(args) -> tuple[str, list[str]]:
     print(f"  {'─' * 50}")
     print(f"  Choose what type of radio traffic to monitor.")
     print()
-    print(f"    [1] {BOLD}FM 2m{NC}    Voice repeater monitoring (VHF 144-148 MHz)")
-    print(f"    [2] {BOLD}FM 70cm{NC}  Voice repeater monitoring (UHF 420-450 MHz)")
-    print(f"    [3] {BOLD}FM Both{NC}  Voice on 2m + 70cm")
-    print(f"    [4] {BOLD}APRS{NC}     Packet data on 144.390 MHz (Direwolf decoder)")
+    print(f"    [1] {BOLD}FM 2m{NC}      Voice repeater monitoring (VHF 144-148 MHz)")
+    print(f"    [2] {BOLD}FM 70cm{NC}    Voice repeater monitoring (UHF 420-450 MHz)")
+    print(f"    [3] {BOLD}FM Both{NC}    Voice on 2m + 70cm")
+    print(f"    [4] {BOLD}APRS{NC}       Packet data on 144.390 MHz (Direwolf decoder)")
+    print(f"    [5] {BOLD}GMRS/FRS{NC}   15 channels on 462 MHz (Ch 8-14 on 467 need second dongle)")
     print()
 
-    choice = prompt("Enter 1-4", default="1")
+    choice = prompt("Enter 1-5", default="1")
 
     if choice in ("2", "70cm", "70"):
         return "fm", ["70cm"]
@@ -461,6 +488,8 @@ def ask_band(args) -> tuple[str, list[str]]:
         return "fm", ["2m", "70cm"]
     elif choice in ("4", "aprs"):
         return "aprs", []
+    elif choice in ("5", "gmrs"):
+        return "gmrs", []
     return "fm", ["2m"]
 
 
@@ -1262,7 +1291,7 @@ ENV_TEMPLATE_FM = """\
 # Node: {node_id} | Metro: {metro}
 
 # ---- Identity ----
-NODUS_EDGE_MODE=fm
+NODUS_EDGE_MODE={mode}
 NODUS_EDGE_NODE_ID={node_id}
 NODUS_EDGE_METRO={metro}
 NODUS_EDGE_CALLSIGN={callsign}
@@ -1329,6 +1358,7 @@ def generate_env(output_dir: Path, config: dict) -> str:
         return ENV_TEMPLATE_APRS.format(**common)
     return ENV_TEMPLATE_FM.format(
         **common,
+        mode=config.get("mode", "fm"),
         core_frequencies=json.dumps(config.get("core_frequencies", [])),
         candidate_frequencies=json.dumps(config.get("candidate_frequencies", [])),
         whisper_api_url=config.get("whisper_api_url", ""),
@@ -1344,6 +1374,7 @@ def write_output(args, config: dict, repeaters: list, metadata: dict):
     """Write .env and repeaters.json to output directory."""
     output_dir = Path(args.output_dir)
     is_aprs = config.get("mode") == "aprs"
+    is_gmrs = config.get("mode") == "gmrs"
 
     env_content = generate_env(output_dir, config)
 
@@ -1355,7 +1386,7 @@ def write_output(args, config: dict, repeaters: list, metadata: dict):
         if is_aprs:
             print()
             print(f"  {BOLD}[DRY-RUN] docker-compose.yml:{NC} rewritten for APRS (no Whisper)")
-        else:
+        elif not is_gmrs:
             print()
             print(f"  {BOLD}[DRY-RUN] repeaters.json:{NC} {len(repeaters)} repeaters")
         return
@@ -1395,7 +1426,7 @@ def write_output(args, config: dict, repeaters: list, metadata: dict):
             )
             compose_path.write_text(aprs_compose)
             info(f"Rewrote {compose_path} for APRS mode (no Whisper)")
-    else:
+    elif not is_gmrs:
         repeaters_data = json.dumps({"metadata": metadata, "repeaters": repeaters}, indent=2)
         rptr_path = output_dir / "repeaters.json"
         rptr_path.write_text(repeaters_data)
@@ -1423,14 +1454,22 @@ def print_summary(config: dict, repeater_count: int, output_dir: str, dry_run: b
         print(f"  Callsign:      {config['callsign']}")
     else:
         print(f"  Callsign:      (anonymous)")
-    print(f"  Mode:          {'APRS (144.390 MHz)' if is_aprs else 'FM voice'}")
+    is_gmrs = config.get("mode") == "gmrs"
+    if is_aprs:
+        mode_label = "APRS (144.390 MHz)"
+    elif is_gmrs:
+        mode_label = "GMRS/FRS (462 MHz, 15 channels)"
+    else:
+        mode_label = "FM voice"
+    print(f"  Mode:          {mode_label}")
     print(f"  Connection:    {connection}")
     print()
 
     if not is_aprs:
         print(f"  Core freqs:    {len(config['core_frequencies'])} (always monitored)")
-        print(f"  Candidate:     {len(config['candidate_frequencies'])} (promoted when active)")
-        print(f"  Repeaters:     {repeater_count} saved")
+        if not is_gmrs:
+            print(f"  Candidate:     {len(config['candidate_frequencies'])} (promoted when active)")
+            print(f"  Repeaters:     {repeater_count} saved")
         print()
 
     if not dry_run:
@@ -1438,7 +1477,7 @@ def print_summary(config: dict, repeater_count: int, output_dir: str, dry_run: b
         print(f"    .env            -> {Path(output_dir) / '.env'}")
         if is_aprs:
             print(f"    compose     -> {Path(output_dir) / 'docker-compose.yml'} (APRS, no Whisper)")
-        else:
+        elif not is_gmrs:
             print(f"    repeaters.json  -> {Path(output_dir) / 'repeaters.json'}")
         print()
         print(f"  Next steps:")
@@ -1481,7 +1520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--whisper-url", help="Whisper API URL")
     parser.add_argument("--output-dir", default=".", help="Output directory (default: current)")
     parser.add_argument("--band", default="2m",
-                        help="Band selection: 2m, 70cm, both, or aprs (default: 2m)")
+                        help="Band selection: 2m, 70cm, both, gmrs, or aprs (default: 2m)")
     parser.add_argument("--radius", type=float, default=DEFAULT_RADIUS_MILES,
                         help=f"Repeater search radius in miles (default: {DEFAULT_RADIUS_MILES})")
     parser.add_argument("--non-interactive", action="store_true",
@@ -1504,7 +1543,7 @@ def main():
     print("=" * 60)
     print()
     print("  This wizard configures a new edge node for NodusNet.")
-    print("  Modes: FM voice monitoring or APRS packet data.")
+    print("  Modes: FM voice, GMRS/FRS, or APRS packet data.")
 
     if args.dry_run:
         print()
@@ -1585,6 +1624,46 @@ def main():
         }
         repeaters = []
         metadata = {}
+    elif mode == "gmrs":
+        # GMRS/FRS mode: fixed 462 MHz channels, no repeater lookup
+        core_hz = list(GMRS_CHANNELS_HZ)
+        candidate_hz = []
+        repeaters = []
+        metadata = {
+            "source": "gmrs-fixed",
+            "channel_count": len(core_hz),
+            "bands": ["gmrs"],
+        }
+
+        print()
+        print(f"  {BOLD}GMRS/FRS Channels (462 MHz){NC}")
+        print(f"  {'─' * 50}")
+        for freq_hz in core_hz:
+            print(f"    {freq_hz / 1_000_000:>10.4f} MHz")
+        print()
+        info(f"{len(core_hz)} channels (462.550-462.725 MHz, 175 kHz span)")
+        info("FRS Ch 8-14 (467 MHz) omitted. Add a second dongle to cover them.")
+
+        sdr_config = ask_sdr_device(args)
+        rf_config = ask_rf_environment(args, sdr_config)
+        whisper_url = ask_whisper(args)
+
+        config = {
+            "mode": "gmrs",
+            "node_id": node_id,
+            "metro": location["metro"],
+            "callsign": callsign,
+            "city": location["city"],
+            "state_abbrev": location.get("state_abbrev", ""),
+            "core_frequencies": core_hz,
+            "candidate_frequencies": candidate_hz,
+            "whisper_api_url": whisper_url,
+            "whisper_auth_token": server_config.get("synapse_auth_token", "") if "nodusrf.com" in (whisper_url or "") or "nodusalert.ai" in (whisper_url or "") else "",
+            "device_index": sdr_config["device_index"],
+            "gain": sdr_config["gain"],
+            **rf_config,
+            **server_config,
+        }
     else:
         # FM mode: full repeater + whisper pipeline
         core_hz, candidate_hz, repeaters, metadata = ask_repeaters(
