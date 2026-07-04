@@ -379,6 +379,12 @@ class FMTranscriptSegmentV1(BaseModel):
         description="Detected signal type: 'voice', 'morse', 'voice+morse', or None (legacy/unknown)"
     )
 
+    # Beacon hint (set by edge node when repeater beacon detected)
+    is_beacon_hint: bool = Field(
+        False,
+        description="Edge node detected this segment as a repeater beacon (hint for Cortex)"
+    )
+
     # Confidence
     confidence: float = Field(
         1.0,

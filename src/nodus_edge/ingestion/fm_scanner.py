@@ -590,6 +590,18 @@ class FMScanner:
         try:
             # Write WAV file with audio normalization
             wav_bytes = self._normalize_audio(buffer.to_wav_bytes())
+
+            # Denoise audio (spectral gating to reduce static/hiss before Whisper)
+            if settings.audio_denoise_enabled:
+                try:
+                    from .audio_denoise import denoise_audio
+                    wav_bytes = denoise_audio(
+                        wav_bytes,
+                        prop_decrease=settings.audio_denoise_prop_decrease,
+                    )
+                except Exception as e:
+                    logger.debug("Audio denoise failed, using normalized", error=str(e))
+
             with open(filepath, 'wb') as f:
                 f.write(wav_bytes)
 

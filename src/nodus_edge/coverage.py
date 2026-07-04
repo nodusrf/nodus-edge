@@ -24,6 +24,7 @@ class CoverageReporter:
         metro: str,
         mode: str = "fm",
         auth_token: Optional[str] = None,
+        get_token: Optional[Callable[[], Optional[str]]] = None,
         get_signal_db: Optional[Callable[[int], Optional[float]]] = None,
     ):
         self.gateway_url = gateway_url.rstrip("/")
@@ -31,6 +32,7 @@ class CoverageReporter:
         self.metro = metro
         self.mode = mode
         self.auth_token = auth_token
+        self._get_token = get_token
         self.get_signal_db = get_signal_db
         self._last_hash: Optional[str] = None
         self._last_report_args: Optional[tuple] = None
@@ -117,8 +119,9 @@ class CoverageReporter:
             payload["lon"] = lon
 
         headers = {}
-        if self.auth_token:
-            headers["Authorization"] = f"Bearer {self.auth_token}"
+        token = (self._get_token() if self._get_token else None) or self.auth_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
         try:
             with httpx.Client(timeout=10.0) as client:

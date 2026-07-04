@@ -684,6 +684,19 @@ class AirbandScanner:
         except Exception as e:
             logger.debug("Audio normalization failed, using raw", error=str(e))
 
+        # Denoise audio (spectral gating to reduce static/hiss before Whisper)
+        if settings.audio_denoise_enabled:
+            try:
+                from .audio_denoise import denoise_audio
+                wav_bytes = wav_path.read_bytes()
+                denoised = denoise_audio(
+                    wav_bytes,
+                    prop_decrease=settings.audio_denoise_prop_decrease,
+                )
+                wav_path.write_bytes(denoised)
+            except Exception as e:
+                logger.debug("Audio denoise failed, using normalized", error=str(e))
+
         # Clean up source MP3 unless keeping for pipeline embedding
         if not settings.fm_airband_keep_mp3:
             mp3_path.unlink(missing_ok=True)

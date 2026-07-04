@@ -166,13 +166,26 @@ fi
 if ! groups "$USER" 2>/dev/null | grep -qw docker; then
     info "Adding $USER to docker group..."
     run $SUDO usermod -aG docker "$USER"
-    warn "You may need to log out and back in for group changes to take effect."
-    warn "If 'docker compose' fails below, run: newgrp docker"
+    info "Group change takes effect on next login — this installer works around it below."
 fi
 
+# Run docker in a way that works even when the docker group was added in
+# this same session (membership is not active until re-login — the #1
+# cause of fresh installs dying right after the wizard, #621).
+# Preference: direct docker, then sg docker, then sudo.
+dockerx() {
+    if docker info &>/dev/null; then
+        docker "$@"
+    elif command -v sg &>/dev/null && sg docker -c "docker info" &>/dev/null; then
+        sg docker -c "docker $(printf '%q ' "$@")"
+    else
+        $SUDO docker "$@"
+    fi
+}
+
 # Check Docker Compose v2 plugin
-if docker compose version &>/dev/null 2>&1; then
-    COMPOSE_VER="$(docker compose version --short 2>/dev/null || echo "v2")"
+if dockerx compose version &>/dev/null 2>&1; then
+    COMPOSE_VER="$(dockerx compose version --short 2>/dev/null || echo "v2")"
     info "Docker Compose plugin: $COMPOSE_VER"
 elif $DRY_RUN; then
     info "[dry-run] Docker Compose not checked"
@@ -275,7 +288,7 @@ if [ -f "$EXISTING_COMPOSE" ] && command -v docker &>/dev/null; then
             if $DRY_RUN; then
                 info "[dry-run] docker compose -f $EXISTING_COMPOSE down"
             else
-                docker compose -f "$EXISTING_COMPOSE" down 2>/dev/null || true
+                dockerx compose -f "$EXISTING_COMPOSE" down 2>/dev/null || true
                 info "Old containers stopped."
             fi
 
@@ -442,6 +455,19 @@ if ! $DRY_RUN; then
         die "Setup wizard did not create $INSTALL_DIR/.env — something went wrong."
     fi
 
+    # Preserve the device token across reinstalls. Signup returns 409 for an
+    # already-enrolled node and cannot re-issue the token, so the wizard
+    # writes an empty NODUSNET_TOKEN — carry the old one forward (#621).
+    if [ -f "$INSTALL_DIR/.env.bak" ]; then
+        OLD_TOKEN="$(grep -E '^NODUSNET_TOKEN=' "$INSTALL_DIR/.env.bak" 2>/dev/null | head -1 | cut -d= -f2- || echo "")"
+        NEW_TOKEN="$(grep -E '^NODUSNET_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- || echo "")"
+        if [ -n "$OLD_TOKEN" ] && [ -z "$NEW_TOKEN" ]; then
+            sed -i '/^NODUSNET_TOKEN=/d' "$INSTALL_DIR/.env"
+            echo "NODUSNET_TOKEN=$OLD_TOKEN" >> "$INSTALL_DIR/.env"
+            info "Preserved device token from previous install"
+        fi
+    fi
+
     # Ensure repeaters.json exists for docker-compose bind mount.
     # The wizard should write it, but if it failed mid-run, fall back to
     # the raw bundled database so Docker doesn't create a directory placeholder.
@@ -475,13 +501,13 @@ if $DRY_RUN; then
 else
     info "Pulling container images (this may take a few minutes on first run)..."
     if $IS_PI; then
-        docker compose -f "$COMPOSE_DST" pull nodus-edge support-sidecar
+        dockerx compose -f "$COMPOSE_DST" pull nodus-edge support-sidecar
     else
-        docker compose -f "$COMPOSE_DST" pull
+        dockerx compose -f "$COMPOSE_DST" pull
     fi
 
     # Capture image digest for REM compliance check-in
-    EDGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' nodusrf/nodus-edge:latest 2>/dev/null | cut -d@ -f2 || echo "")"
+    EDGE_DIGEST="$(dockerx inspect --format='{{index .RepoDigests 0}}' nodusrf/nodus-edge:latest 2>/dev/null | cut -d@ -f2 || echo "")"
     if [ -n "$EDGE_DIGEST" ]; then
         # Remove stale digest line if present, then append
         sed -i '/^NODUS_IMAGE_DIGEST=/d' "$INSTALL_DIR/.env"
@@ -492,7 +518,7 @@ else
     fi
 
     info "Starting containers..."
-    docker compose -f "$COMPOSE_DST" up -d $COMPOSE_EXTRA_ARGS
+    dockerx compose -f "$COMPOSE_DST" up -d $COMPOSE_EXTRA_ARGS
 fi
 
 # ---------------------------------------------------------------------------
@@ -547,7 +573,15 @@ TMREOF
 
         systemctl --user daemon-reload 2>/dev/null || true
         systemctl --user enable --now "nodusnet-updater${UNIT_SUFFIX}.timer" 2>/dev/null || true
-        loginctl enable-linger "$USER" 2>/dev/null || true
+        # Lingering must be enabled with privilege: as a plain user this can
+        # silently fail (polkit), the user manager then dies on logout, and
+        # the updater timer never fires again — verified fleet-wide failure
+        # mode (#618). Verify, and warn loudly if it cannot be enabled.
+        loginctl enable-linger "$USER" 2>/dev/null || $SUDO loginctl enable-linger "$USER" 2>/dev/null || true
+        if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
+            warn "Could not enable session lingering — auto-updates will stop when you log out."
+            warn "Fix manually: sudo loginctl enable-linger $USER"
+        fi
     else
         # Fallback to cron — use path-specific line so multiple instances coexist
         CRON_LINE="*/5 * * * * $UPDATER_PATH >> $INSTALL_DIR/.updater.log 2>&1"
@@ -617,13 +651,13 @@ else
     INTERVAL=5
 
     while [ $ELAPSED -lt $MAX_WAIT ]; do
-        HEALTH="$(docker compose -f "$COMPOSE_DST" ps whisper --format '{{.Health}}' 2>/dev/null || echo "")"
+        HEALTH="$(dockerx compose -f "$COMPOSE_DST" ps whisper --format '{{.Health}}' 2>/dev/null || echo "")"
         if [ "$HEALTH" = "healthy" ]; then
             info "Whisper is healthy!"
             break
         fi
 
-        STATE="$(docker compose -f "$COMPOSE_DST" ps whisper --format '{{.State}}' 2>/dev/null || echo "")"
+        STATE="$(dockerx compose -f "$COMPOSE_DST" ps whisper --format '{{.State}}' 2>/dev/null || echo "")"
         if [ "$STATE" = "exited" ]; then
             warn "Whisper container exited unexpectedly."
             warn "Check logs: docker compose -f $COMPOSE_DST logs whisper"
@@ -641,7 +675,7 @@ else
     fi
 
     echo ""
-    EDGE_STATE="$(docker compose -f "$COMPOSE_DST" ps nodus-edge --format '{{.State}}' 2>/dev/null || echo "")"
+    EDGE_STATE="$(dockerx compose -f "$COMPOSE_DST" ps nodus-edge --format '{{.State}}' 2>/dev/null || echo "")"
     if [ "$EDGE_STATE" = "running" ]; then
         info "NodusEdge is running!"
     else
@@ -654,7 +688,7 @@ fi
 # Summary
 # ---------------------------------------------------------------------------
 
-NODE_ID="$(grep -E '^(RECEPT_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || echo "unknown")"
+NODE_ID="$(grep -E '^(NODUS_EDGE_NODE_ID|NODUS_EDGE_NODE_ID)=' "$INSTALL_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2 || echo "unknown")"
 
 echo ""
 echo "============================================================"

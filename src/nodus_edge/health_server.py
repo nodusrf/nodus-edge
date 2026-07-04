@@ -30,6 +30,11 @@ class HealthHandler(BaseHTTPRequestHandler):
     _audit_log: list = [None]  # TranscriptionAuditLog instance (optional)
     _synapse_publisher: list = [None]  # SynapsePublisher instance (optional)
     _scanner: list = [None]  # AirbandScanner instance (optional)
+    # Lifecycle status: "starting" -> "healthy", or "degraded" (startup failed,
+    # process kept alive so this server and the dashboard stay reachable),
+    # or "canary" (OTA pre-flight boot, no hardware or network side effects).
+    _status: list = ["healthy"]
+    _startup_error: list = [None]
     node_id: str = "unknown"
     start_time: datetime = datetime.now(timezone.utc)
     audio_dir: Optional[Path] = None  # FM capture directory for audio serving
@@ -87,13 +92,18 @@ class HealthHandler(BaseHTTPRequestHandler):
         uptime = (datetime.now(timezone.utc) - self.start_time).total_seconds()
 
         response = {
-            "status": "healthy",
+            "status": self._status[0],
             "node_id": self.node_id,
             "uptime_seconds": uptime,
             "processed_count": stats.get("processed_count", 0),
             "error_count": stats.get("error_count", 0),
         }
+        if self._startup_error[0]:
+            response["startup_error"] = self._startup_error[0]
 
+        # 200 even when degraded: the process is alive and serving. Degraded
+        # is a config/hardware condition, carried in the body so the canary
+        # probe and docker healthcheck don't restart-loop a fixable node.
         self._send_json(200, response)
 
     def _send_stats(self):
@@ -345,6 +355,7 @@ class HealthServer:
         audit_log=None,
         synapse_publisher=None,
         scanner=None,
+        status: str = "healthy",
     ):
         self.port = port
         self.node_id = node_id
@@ -354,8 +365,25 @@ class HealthServer:
         self.audit_log = audit_log
         self.synapse_publisher = synapse_publisher
         self.scanner = scanner
+        self.status = status
         self._server: Optional[HTTPServer] = None
         self._thread: Optional[Thread] = None
+
+    def set_status(self, status: str, startup_error: Optional[str] = None) -> None:
+        """Update the reported lifecycle status (healthy/degraded/canary)."""
+        self.status = status
+        HealthHandler._status[0] = status
+        HealthHandler._startup_error[0] = startup_error
+
+    def set_scanner(self, scanner) -> None:
+        """Late-bind the scanner after it is created (health server starts first)."""
+        self.scanner = scanner
+        HealthHandler._scanner[0] = scanner
+
+    def set_synapse_publisher(self, synapse_publisher) -> None:
+        """Late-bind the Synapse publisher after pipeline wiring."""
+        self.synapse_publisher = synapse_publisher
+        HealthHandler._synapse_publisher[0] = synapse_publisher
 
     def start(self):
         """Start the health server in a background thread."""
@@ -365,6 +393,8 @@ class HealthServer:
         HealthHandler._audit_log = [self.audit_log]
         HealthHandler._synapse_publisher = [self.synapse_publisher]
         HealthHandler._scanner = [self.scanner]
+        HealthHandler._status = [self.status]
+        HealthHandler._startup_error = [None]
         HealthHandler.node_id = self.node_id
         HealthHandler.start_time = datetime.now(timezone.utc)
         HealthHandler.audio_dir = self.audio_dir
@@ -379,7 +409,9 @@ class HealthServer:
             logger.warning("Could not start health server", port=self.port, error=str(e))
 
     def stop(self):
-        """Stop the health server."""
+        """Stop the health server and release the listening socket."""
         if self._server:
             self._server.shutdown()
+            self._server.server_close()
+            self._server = None
             logger.info("Health server stopped")

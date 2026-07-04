@@ -135,6 +135,12 @@ class FMPipeline:
                 tone_range=f"{settings.fm_morse_tone_range_low_hz}-{settings.fm_morse_tone_range_high_hz} Hz",
             )
 
+        # Cross-segment dedup: ring buffer of recent (frequency, cleaned_text) pairs.
+        # If the same text appears N times in a row on the same frequency, suppress.
+        from collections import deque
+        self._recent_texts: deque = deque(maxlen=20)
+        self._cross_segment_dedup_threshold = 3  # Suppress after 3 identical in a row
+
         # Segment callbacks (e.g., dashboard store)
         self._segment_callbacks: List[Callable] = []
 
@@ -144,9 +150,11 @@ class FMPipeline:
         self._segment_warning_window = 3600  # 1 hour in seconds
 
         # Stats
+        self._captured_count = 0
         self._processed_count = 0
         self._transcribed_count = 0
         self._filtered_count = 0
+        self._hallucination_count = 0
         self._beacon_count = 0
         self._kerchunk_count = 0
         self._bleedover_count = 0
@@ -155,6 +163,7 @@ class FMPipeline:
         self._transcription_failed_count = 0
         self._synapse_published_count = 0
         self._callsigns_extracted = 0
+        self._cross_dedup_count = 0
 
         # Shadow Whisper client for model comparison (fire-and-forget)
         self._shadow_whisper: Optional[WhisperClient] = None
@@ -203,6 +212,7 @@ class FMPipeline:
             The emitted segment, or None on error.
         """
         logger.debug("Processing FM recording", path=recording_path.name)
+        self._captured_count += 1
 
         # Parse recording metadata from filename
         metadata = self.parser.parse_fm_recording(recording_path)
@@ -294,7 +304,7 @@ class FMPipeline:
 
         # Build Whisper initial prompt for ham radio vocabulary priming
         initial_prompt = None
-        if settings.fm_whisper_prompt_enabled and settings.mode == "fm":
+        if settings.fm_whisper_prompt_enabled and settings.mode in ("fm", "gmrs"):
             initial_prompt = self._build_whisper_prompt(metadata["frequency_hz"])
 
         whisper_is_hallucination = False
@@ -417,14 +427,30 @@ class FMPipeline:
                 audio_filename=recording_path.name,
             )
 
+        # Reject noise decoded as Morse — Goertzel picks up voice harmonics
+        # in the 400-1200 Hz range and decodes them as random letter salad.
+        # Real CW beacons produce recognizable callsigns, not single-letter garbage.
+        if morse_detected and self._is_noise_morse(morse_result):
+            logger.info(
+                "Morse rejected (noise pattern)",
+                morse_text=morse_result.text[:60],
+                confidence=round(morse_result.confidence, 2),
+                path=recording_path.name,
+            )
+            morse_detected = False
+
         if whisper_is_hallucination and not morse_detected:
             # No Morse, Whisper hallucinated → drop as before
             logger.info(
                 "Filtered Whisper hallucination",
                 text=transcription.text.strip()[:80] if transcription and transcription.text else "",
+                reason=rejection_reason,
+                quality_score=round(quality_score, 3),
+                min_confidence=round(transcription.min_confidence, 3) if transcription and transcription.min_confidence is not None else None,
                 path=recording_path.name,
             )
             self._filtered_count += 1
+            self._hallucination_count += 1
             return None
 
         if morse_detected and (whisper_is_hallucination or not (transcription and transcription.text)):
@@ -505,6 +531,32 @@ class FMPipeline:
             })
             return None
 
+        # Cross-segment dedup: suppress if the same text appears N times
+        # in a row on the same frequency. Catches Whisper decoding the same
+        # noise artifact repeatedly (e.g., 20x "Thank you." on 147.390).
+        if transcription and transcription.text:
+            freq_hz = metadata.get("frequency_hz", 0)
+            cleaned_for_dedup = transcription.text.strip().lower().rstrip(".!?,;:")
+            recent_key = (freq_hz, cleaned_for_dedup)
+            consecutive = 0
+            for item in reversed(self._recent_texts):
+                if item == recent_key:
+                    consecutive += 1
+                else:
+                    break
+            self._recent_texts.append(recent_key)
+            if consecutive >= self._cross_segment_dedup_threshold:
+                logger.info(
+                    "Cross-segment dedup suppressed",
+                    text=transcription.text.strip()[:60],
+                    frequency_hz=freq_hz,
+                    consecutive_count=consecutive + 1,
+                    path=recording_path.name,
+                )
+                self._cross_dedup_count += 1
+                self._filtered_count += 1
+                return None
+
         # Look up repeater info for frequency enrichment
         repeater_callsign = None
         repeater_info = self._repeater_db.lookup_frequency(metadata["frequency_hz"])
@@ -539,7 +591,9 @@ class FMPipeline:
             detected_callsigns = sorted(set(corrected))
 
         # Detect automated repeater beacons (voice IDs / time announcements)
-        # Skip for CW-decoded segments — the whole point of CW decoding is to capture the beacon ID
+        # Tag as hint for Cortex but let the segment flow through.
+        # Skip for CW-decoded segments — CW is inherently beacon content.
+        is_beacon_hint = False
         if (settings.fm_beacon_filter_enabled
                 and repeater_callsign
                 and signal_type != "morse"
@@ -550,25 +604,16 @@ class FMPipeline:
                 detected_callsigns,
             )
             if is_beacon:
+                is_beacon_hint = True
                 freq_str = self.parser.format_frequency(metadata["frequency_hz"])
                 logger.info(
-                    "Repeater beacon detected",
+                    "Repeater beacon hint set",
                     repeater=repeater_callsign,
                     frequency=freq_str,
                     heard=beacon_heard,
                     path=recording_path.name,
                 )
                 self._beacon_count += 1
-                audit_log.log_transcription(
-                    modality="fm",
-                    text=beacon_heard,
-                    outcome="filtered_beacon",
-                    rejection_reason=f"Repeater beacon ({repeater_callsign})",
-                    frequency_hz=metadata.get("frequency_hz"),
-                    duration_seconds=transcription.duration_seconds if transcription else None,
-                    audio_filename=recording_path.name,
-                )
-                return None
 
         # Calculate confidence
         confidence = self._calculate_confidence(transcription)
@@ -604,6 +649,7 @@ class FMPipeline:
             transcription=transcription,
             detected_callsigns=detected_callsigns,
             signal_type=signal_type,
+            is_beacon_hint=is_beacon_hint,
             confidence=confidence,
             source_files={
                 "audio": str(recording_path),
@@ -731,6 +777,9 @@ class FMPipeline:
         except Exception as e:
             logger.debug("Audio cleanup error", error=str(e))
 
+    # FCC callsign pattern for CW plausibility: W/K/N + optional letter + digit + 1-3 letters
+    _CW_CALLSIGN_RE = re.compile(r'[WKNA][A-Z]?\d[A-Z]{1,3}')
+
     @staticmethod
     def _is_kerchunk_courtesy_tone(morse_result) -> bool:
         """Detect courtesy tone beeps misinterpreted as Morse code.
@@ -747,6 +796,39 @@ class FMPipeline:
         # Courtesy tones decode as only E (dit) and T (dah)
         chars = set(text.replace(" ", ""))
         return chars.issubset({"E", "T"})
+
+    @classmethod
+    def _is_noise_morse(cls, morse_result) -> bool:
+        """Detect voice harmonics decoded as fake Morse.
+
+        The Goertzel tone detector picks up voice energy in the 400-1200 Hz
+        range and the decoder produces random letter salad. Real CW repeater
+        beacons produce recognizable callsigns with structured spacing.
+
+        Noise signatures:
+        - Dominated by single-letter words (E, I, T, S, D — simplest symbols)
+        - No FCC callsign pattern anywhere in the output
+        - High volume of decoded "words" relative to meaningful content
+        """
+        text = morse_result.text.strip()
+        if not text:
+            return True
+
+        # If a callsign is present, trust the decode
+        collapsed = text.replace(" ", "")
+        if cls._CW_CALLSIGN_RE.search(collapsed):
+            return False
+
+        words = text.split()
+        if not words:
+            return True
+
+        single_char_count = sum(1 for w in words if len(w) == 1)
+        single_char_ratio = single_char_count / len(words)
+
+        # Real CW has multi-character words (callsign letters are spaced but
+        # form recognizable groups). Noise is mostly single-letter fragments.
+        return single_char_ratio > 0.5
 
     def _detect_repeater_beacon(
         self,
@@ -972,9 +1054,14 @@ class FMPipeline:
 
     def get_stats(self) -> Dict[str, Any]:
         """Get pipeline statistics."""
+        captured = self._captured_count
+        dropped = captured - self._processed_count
+        filter_rate = dropped / captured if captured > 0 else 0.0
+
         stats = {
             "node_id": self.node_id,
             "mode": "fm",
+            "captured_count": captured,
             "processed_count": self._processed_count,
             "transcribed_count": self._transcribed_count,
             "filtered_count": self._filtered_count,
@@ -985,11 +1072,26 @@ class FMPipeline:
             "callsigns_extracted": self._callsigns_extracted,
             "error_count": self._error_count,
             "transcription_failed_count": self._transcription_failed_count,
+            "cross_dedup_count": self._cross_dedup_count,
             "synapse_published_count": self._synapse_published_count,
             "transcription_enabled": self.transcription_enabled,
             "whisper_available": self._whisper_available,
             "emitter": self.emitter.get_stats(),
             "synapse": self.synapse_publisher.get_stats(),
+            "filter_summary": {
+                "captured_count": captured,
+                "sent_count": self._processed_count,
+                "dropped_count": dropped,
+                "filter_rate": round(filter_rate, 3),
+                "by_reason": {
+                    "hallucination": self._hallucination_count,
+                    "kerchunk": self._kerchunk_count,
+                    "bleedover": self._bleedover_count,
+                    "transcription_failed": self._transcription_failed_count,
+                    "cross_dedup": self._cross_dedup_count,
+                    "parse_error": self._error_count,
+                },
+            },
         }
         if self._shadow_whisper:
             stats["shadow_whisper"] = {

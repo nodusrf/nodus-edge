@@ -6,10 +6,11 @@ or via a .env file.
 """
 
 import os
+import re
 import socket
 from pathlib import Path
 from typing import Optional, List, Literal
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,8 +35,14 @@ class Settings(BaseSettings):
     metro: str = ""  # Metro area slug (e.g., "phoenix", "omaha")
     callsign: str = ""  # Operator callsign (empty = anonymous node)
 
-    # Radio mode: p25 (SDRTrunk/Trunk Recorder), fm (ham radio), hf (HF amateur), or aprs (packet)
-    mode: Literal["p25", "fm", "hf", "aprs"] = "p25"
+    # Radio mode: p25 (SDRTrunk/Trunk Recorder), fm (ham radio), gmrs (GMRS/FRS),
+    # hf (HF amateur), or aprs (packet). gmrs uses the same FM scanner pipeline.
+    mode: Literal["p25", "fm", "gmrs", "hf", "aprs"] = "p25"
+
+    # Canary boot: health server only. No hardware access, no REM check-in,
+    # no Synapse publish, no heartbeat. Used by the OTA updater to verify a
+    # new image boots on this host before swapping production containers.
+    canary_mode: bool = False
 
     # P25 source: sdrtrunk (filename-based) or trunk-recorder (JSON-based)
     p25_source: Literal["sdrtrunk", "trunk-recorder"] = "sdrtrunk"
@@ -64,6 +71,103 @@ class Settings(BaseSettings):
 
     # Gateway endpoint for coverage coordination, OTA, etc.
     gateway_url: Optional[str] = None
+
+    @model_validator(mode='after')
+    def _validate_all_fields(self) -> 'Settings':
+        """Comprehensive validation of all settings at startup.
+
+        Catches bad values from .env files early with clear error messages
+        instead of letting them cause confusing crashes deep in the code.
+        """
+        errors: list[str] = []
+
+        # Positive numeric fields (timeouts, intervals, sizes, thresholds)
+        positive_fields = {
+            "fm_dwell_seconds": self.fm_dwell_seconds,
+            "fm_idle_timeout_seconds": self.fm_idle_timeout_seconds,
+            "fm_segment_max_seconds": self.fm_segment_max_seconds,
+            "fm_segment_min_seconds": self.fm_segment_min_seconds,
+            "fm_watchdog_timeout_seconds": self.fm_watchdog_timeout_seconds,
+            "fm_segment_watchdog_timeout_seconds": self.fm_segment_watchdog_timeout_seconds,
+            "fm_max_freq_dwell_seconds": self.fm_max_freq_dwell_seconds,
+            "fm_whisper_retry_interval_seconds": self.fm_whisper_retry_interval_seconds,
+            "fm_airband_fft_size": self.fm_airband_fft_size,
+            "fm_airband_min_mp3_bytes": self.fm_airband_min_mp3_bytes,
+            "fm_audio_retention_hours": self.fm_audio_retention_hours,
+            "whisper_timeout_seconds": self.whisper_timeout_seconds,
+            "whisper_queue_maxsize": self.whisper_queue_maxsize,
+            "synapse_timeout_seconds": self.synapse_timeout_seconds,
+            "poll_interval_seconds": self.poll_interval_seconds,
+            "batch_size": self.batch_size,
+            "max_retries": self.max_retries,
+            "dedup_cache_size": self.dedup_cache_size,
+            "dedup_ttl_seconds": self.dedup_ttl_seconds,
+            "hf_audio_sample_rate": self.hf_audio_sample_rate,
+            "hf_segment_max_seconds": self.hf_segment_max_seconds,
+            "hf_segment_min_seconds": self.hf_segment_min_seconds,
+            "aprs_sample_rate": self.aprs_sample_rate,
+            "connectivity_probe_interval_sec": self.connectivity_probe_interval_sec,
+            "connectivity_fail_threshold": self.connectivity_fail_threshold,
+            "dashboard_max_segments": self.dashboard_max_segments,
+            "thread_gap_seconds": self.thread_gap_seconds,
+            "thread_prune_hours": self.thread_prune_hours,
+        }
+        for name, val in positive_fields.items():
+            if val <= 0:
+                errors.append(f"{name}={val} must be positive.")
+
+        # Non-negative numeric fields
+        non_negative_fields = {
+            "fm_squelch_threshold": self.fm_squelch_threshold,
+            "fm_rtl_device_index": self.fm_rtl_device_index,
+            "fm_airband_center_freq_hz": self.fm_airband_center_freq_hz,
+            "fm_airband_squelch_snr_db": self.fm_airband_squelch_snr_db,
+            "aprs_device_index": self.aprs_device_index,
+            "quality_score_threshold": self.quality_score_threshold,
+            "fm_min_confidence": self.fm_min_confidence,
+            "fm_morse_min_snr_db": self.fm_morse_min_snr_db,
+            "fm_morse_min_confidence": self.fm_morse_min_confidence,
+        }
+        for name, val in non_negative_fields.items():
+            if val < 0:
+                errors.append(f"{name}={val} must be non-negative.")
+
+        # Range checks
+        if not (0 <= self.fm_squelch_threshold <= 100):
+            errors.append(f"fm_squelch_threshold={self.fm_squelch_threshold} out of range (0-100).")
+        if not (0.0 <= self.quality_score_threshold <= 1.0):
+            errors.append(f"quality_score_threshold={self.quality_score_threshold} out of range (0.0-1.0).")
+        if not (0.0 <= self.fm_min_confidence <= 1.0):
+            errors.append(f"fm_min_confidence={self.fm_min_confidence} out of range (0.0-1.0).")
+        if not (0.0 <= self.fm_morse_min_confidence <= 1.0):
+            errors.append(f"fm_morse_min_confidence={self.fm_morse_min_confidence} out of range (0.0-1.0).")
+        if self.whisper_repetition_penalty < 1.0:
+            errors.append(f"whisper_repetition_penalty={self.whisper_repetition_penalty} must be >= 1.0.")
+        if self.fm_morse_tone_range_low_hz >= self.fm_morse_tone_range_high_hz:
+            errors.append(
+                f"fm_morse_tone_range_low_hz ({self.fm_morse_tone_range_low_hz}) "
+                f"must be less than fm_morse_tone_range_high_hz ({self.fm_morse_tone_range_high_hz})."
+            )
+
+        # URL validation (when set, must look like a URL)
+        url_fields = {
+            "synapse_endpoint": self.synapse_endpoint,
+            "diagnostics_endpoint": self.diagnostics_endpoint,
+            "rem_endpoint": self.rem_endpoint,
+            "gateway_url": self.gateway_url,
+            "whisper_api_url": self.whisper_api_url,
+        }
+        for name, val in url_fields.items():
+            if val and not val.startswith(("http://", "https://")):
+                errors.append(f"{name}='{val}' must start with http:// or https://.")
+
+        if errors:
+            msg = "Configuration validation failed. Check your .env file:\n"
+            for e in errors:
+                msg += f"  - NODUS_EDGE_{e.split('=')[0].upper()}: {e}\n"
+            raise ValueError(msg)
+
+        return self
 
     @model_validator(mode='after')
     def _derive_from_server(self) -> 'Settings':
@@ -129,7 +233,72 @@ class Settings(BaseSettings):
     fm_kerchunk_filter_enabled: bool = True  # Filter courtesy tone kerchunks decoded as single-letter Morse
     p25_hallucination_filter_enabled: bool = True  # Filter known Whisper hallucinations (P25)
     fm_rtl_device_index: int = 0  # RTL-SDR device index
-    fm_gain: str = "40"  # RTL-SDR gain (auto or value)
+    fm_gain: str = "40"  # RTL-SDR gain ("auto" or numeric value)
+
+    @field_validator("fm_gain", "aprs_gain", mode="after")
+    @classmethod
+    def _validate_gain(cls, v: str) -> str:
+        if v.lower() == "auto":
+            return "auto"
+        try:
+            val = float(v)
+        except ValueError:
+            raise ValueError(
+                f"Invalid gain value '{v}'. Must be 'auto' or a number (e.g., '40'). "
+                f"Check your .env file for typos."
+            )
+        if val < 0 or val > 100:
+            raise ValueError(
+                f"Gain value {val} out of range. Expected 0-100 or 'auto'."
+            )
+        return v
+
+    @field_validator(
+        "fm_core_frequencies", "fm_candidate_frequencies", "fm_frequencies",
+        mode="after",
+    )
+    @classmethod
+    def _validate_frequencies(cls, v: List[int]) -> List[int]:
+        for freq in v:
+            if freq < 1_000_000 or freq > 30_000_000_000:
+                raise ValueError(
+                    f"Frequency {freq} Hz out of range. "
+                    f"Expected Hz values between 1 MHz and 30 GHz (e.g., 146940000 for 146.94 MHz)."
+                )
+        return v
+
+    @field_validator("callsign", mode="after")
+    @classmethod
+    def _validate_callsign(cls, v: str) -> str:
+        if not v:
+            return v
+        # Amateur radio: 1-2 letters, digit, 1-3 letters (e.g., W1AW, KK7QPZ)
+        # GMRS: WR + 2 letters + 3 digits (e.g., WREF123)
+        if not (re.match(r"^[A-Za-z]{1,2}\d[A-Za-z]{1,3}$", v)
+                or re.match(r"^WR[A-Za-z]{2}\d{3}$", v)):
+            raise ValueError(
+                f"Invalid callsign format '{v}'. "
+                f"Expected amateur (e.g., 'W1AW', 'KK7QPZ') "
+                f"or GMRS (e.g., 'WRNB456') callsign."
+            )
+        return v.upper()
+
+    @field_validator("log_level", mode="after")
+    @classmethod
+    def _validate_log_level(cls, v: str) -> str:
+        valid = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if v.upper() not in valid:
+            raise ValueError(
+                f"Invalid log_level '{v}'. Must be one of: {', '.join(sorted(valid))}."
+            )
+        return v
+
+    @field_validator("dashboard_port", mode="after")
+    @classmethod
+    def _validate_port(cls, v: int) -> int:
+        if v < 1 or v > 65535:
+            raise ValueError(f"Port {v} out of range. Expected 1-65535.")
+        return v
 
     # RTLSDR-Airband multichannel scanner
     fm_scanner_backend: Literal["rtl_fm", "airband"] = "rtl_fm"  # "airband" for simultaneous multi-channel
@@ -141,12 +310,16 @@ class Settings(BaseSettings):
     fm_airband_keep_mp3: bool = True  # Keep source MP3 for pipeline audio embedding
     fm_audio_retention_hours: int = 48  # Delete WAV/MP3 older than this (edge buffer)
 
+    # Audio denoising (spectral gating, runs after normalization, before Whisper)
+    audio_denoise_enabled: bool = False  # Enable noisereduce spectral gating
+    audio_denoise_prop_decrease: float = 0.75  # Noise reduction strength (0.0-1.0)
+
     # Morse code detection
     fm_morse_detection_enabled: bool = True  # Enable CW Morse code detection/decoding
     fm_morse_min_snr_db: float = 10.0  # Minimum tone SNR (dB) to consider Morse present
     fm_morse_tone_range_low_hz: int = 400  # Low end of CW tone search range
     fm_morse_tone_range_high_hz: int = 1200  # High end of CW tone search range
-    fm_morse_min_confidence: float = 0.3  # Reject morse decodes below this confidence
+    fm_morse_min_confidence: float = 0.5  # Reject morse decodes below this confidence
 
     # FFT spillover detection (in airband scanner, pre-Whisper)
     fm_spillover_detection_enabled: bool = False  # Detect cross-frequency FFT spillover duplicates (disabled pending better winner selection)
@@ -155,7 +328,7 @@ class Settings(BaseSettings):
 
     # RF bleedover detection (pre-Whisper signal strength gate)
     fm_bleedover_detection_enabled: bool = True  # Detect front-end overload from nearby transmitters
-    fm_bleedover_threshold_db: float = -25.0  # Signal strength above this is suspected bleedover (normal: -50 to -70 dB)
+    fm_bleedover_threshold_db: float = -15.0  # Signal strength above this is suspected bleedover (normal: -50 to -70 dB)
     fm_bleedover_action: Literal["drop", "flag"] = "flag"  # "flag" adds metadata but still emits, "drop" discards
 
     # FM pipeline hardening
@@ -170,8 +343,9 @@ class Settings(BaseSettings):
     quality_gate_primary: bool = True  # Quality gate makes filtering decisions (legacy phrase list is fallback)
 
     # FM confidence floor — hard cutoff on Whisper's min segment confidence
-    # Whisper's min_confidence cleanly separates noise (max 0.391) from speech (min 0.509)
-    fm_min_confidence: float = 0.45
+    # Calibrated against 48kbps CBR audio + small model (2026-03-23).
+    # Old threshold (0.45) was tuned for 16kbps VBR base model and rejected real speech.
+    fm_min_confidence: float = 0.30
 
     # Tail loop truncation — detect and truncate mid-segment Whisper loops
     # Whisper sometimes transcribes valid speech then enters a loop repeating

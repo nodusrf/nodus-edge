@@ -118,8 +118,6 @@ class REMCheckIn:
             frequencies = []
 
         image_digest = os.environ.get("NODUS_IMAGE_DIGEST", "")
-        if not image_digest:
-            logger.warning("NODUS_IMAGE_DIGEST not set. REM will reject this check-in.")
 
         payload = {
             "node_id": self.node_id,
@@ -182,13 +180,13 @@ class REMCheckIn:
                     logger.debug("REM check-in OK", version=__version__)
 
             elif response.status_code == 404:
-                logger.error(
-                    "Node not enrolled in REM",
+                logger.warning(
+                    "Node not enrolled in REM, attempting auto-enrollment",
                     node_id=self.node_id,
-                    detail=response.text,
                 )
                 self.compliance_token = None
                 self.is_compliant = False
+                self._auto_enroll()
             else:
                 logger.warning(
                     "REM check-in rejected",
@@ -206,6 +204,70 @@ class REMCheckIn:
         except Exception as e:
             self._consecutive_failures += 1
             logger.debug("REM check-in failed", error=str(e))
+
+    def _auto_enroll(self) -> None:
+        """Attempt to enroll this node with REM on first 404."""
+        callsign = os.environ.get("NODUS_EDGE_CALLSIGN", "")
+        metro = os.environ.get("NODUS_EDGE_METRO", "")
+
+        signup_payload = {
+            "node_id": self.node_id,
+            "callsign": callsign,
+            "email": "",
+            "metro": metro,
+        }
+
+        try:
+            with httpx.Client(timeout=CHECKIN_TIMEOUT_SECONDS) as client:
+                resp = client.post(
+                    f"{self.rem_endpoint}/v1/signup",
+                    json=signup_payload,
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                api_token = data.get("api_token", "")
+                if api_token:
+                    self.auth_token = api_token
+                    os.environ["NODUSNET_TOKEN"] = api_token
+                    self._persist_token(api_token)
+                    logger.info("Auto-enrolled with REM, API token received", node_id=self.node_id)
+                else:
+                    logger.info("Auto-enrolled with REM", node_id=self.node_id)
+            elif resp.status_code == 409:
+                logger.info("Node already enrolled in REM", node_id=self.node_id)
+            else:
+                logger.warning(
+                    "REM auto-enrollment failed",
+                    status=resp.status_code,
+                    detail=resp.text[:200],
+                )
+        except Exception as e:
+            logger.warning("REM auto-enrollment error", error=str(e))
+
+    def _persist_token(self, token: str) -> None:
+        """Write NODUSNET_TOKEN to .env so it survives container restarts."""
+        env_path = "/root/nodusedge/.env"
+        if not os.path.exists(env_path):
+            env_path = os.path.join(os.getcwd(), ".env")
+        if not os.path.exists(env_path):
+            logger.warning("Cannot persist token: .env not found")
+            return
+        try:
+            with open(env_path) as f:
+                lines = f.readlines()
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith("NODUSNET_TOKEN="):
+                    lines[i] = f"NODUSNET_TOKEN={token}\n"
+                    found = True
+                    break
+            if not found:
+                lines.append(f"NODUSNET_TOKEN={token}\n")
+            with open(env_path, "w") as f:
+                f.writelines(lines)
+            logger.info("API token persisted to .env")
+        except Exception as e:
+            logger.warning("Failed to persist token to .env", error=str(e))
 
     def _handle_actions(self, actions: List[Dict[str, Any]]) -> None:
         """Process one-shot actions from REM. Runs handlers in background threads."""
@@ -234,6 +296,20 @@ class REMCheckIn:
                     daemon=True,
                 )
                 thread.start()
+            elif action_type == "config_push":
+                payload = action.get("payload", {})
+                logger.info(
+                    "Config push from NodusRF",
+                    keys=list(payload.get("env", {}).keys()),
+                    reason=payload.get("reason", ""),
+                    action_id=action_id,
+                )
+                thread = threading.Thread(
+                    target=self._apply_config_push,
+                    args=(payload, action_id),
+                    daemon=True,
+                )
+                thread.start()
             else:
                 logger.warning("Unknown REM action type", action_type=action_type)
 
@@ -255,6 +331,90 @@ class REMCheckIn:
                 )
         except Exception as e:
             logger.warning("Dashboard notification delivery error", error=str(e))
+
+    def _apply_config_push(self, payload: Dict[str, Any], action_id: str) -> None:
+        """Apply config overrides from REM.
+
+        Writes overrides to /data/config-overrides.env (persistent across
+        restarts) and applies them to os.environ for the current process.
+        Settings that read from os.environ on access pick up changes
+        immediately; others take effect on next container restart.
+        """
+        env_overrides = payload.get("env", {})
+        reason = payload.get("reason", "")
+        if not env_overrides:
+            logger.warning("Config push had no env overrides", action_id=action_id)
+            return
+
+        # Allowlist: only accept known edge config keys to prevent injection
+        allowed_prefixes = (
+            "NODUS_EDGE_",
+            "NODUSNET_",
+            "NODUS_EDGE_",
+        )
+        allowed_exact = {"NODUS_TUNNEL_TOKEN"}
+        applied = {}
+        rejected = {}
+        for key, value in env_overrides.items():
+            if key not in allowed_exact and not any(key.startswith(p) for p in allowed_prefixes):
+                rejected[key] = "not in allowed prefix list"
+                continue
+            old_value = os.environ.get(key, "<unset>")
+            os.environ[key] = str(value)
+            applied[key] = {"old": old_value, "new": str(value)}
+
+        # Persist to override file so changes survive container restarts
+        override_path = "/data/config-overrides.env"
+        try:
+            # Read existing overrides
+            existing = {}
+            if os.path.exists(override_path):
+                with open(override_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and "=" in line and not line.startswith("#"):
+                            k, v = line.split("=", 1)
+                            existing[k] = v
+            # Merge new overrides
+            for key in applied:
+                existing[key] = applied[key]["new"]
+            # Write back
+            with open(override_path, "w") as f:
+                f.write(f"# REM config push — {reason}\n")
+                f.write(f"# Applied at: {datetime.now(timezone.utc).isoformat()}\n")
+                for k, v in sorted(existing.items()):
+                    f.write(f"{k}={v}\n")
+            logger.info(
+                "Config overrides persisted",
+                path=override_path,
+                keys=list(applied.keys()),
+            )
+        except Exception as e:
+            logger.warning("Failed to persist config overrides", error=str(e))
+
+        if applied:
+            logger.info(
+                "Config push applied",
+                applied=applied,
+                reason=reason,
+                action_id=action_id,
+            )
+        if rejected:
+            logger.warning(
+                "Config push keys rejected",
+                rejected=rejected,
+                action_id=action_id,
+            )
+
+        # Notify dashboard
+        self._deliver_dashboard_notification({
+            "title": "Config Updated by NodusRF",
+            "body": (
+                f"Settings changed: {', '.join(applied.keys())}. "
+                f"Reason: {reason or 'not specified'}."
+            ),
+            "priority": "medium",
+        })
 
     def _collect_and_upload_dump(self, action_id: str) -> None:
         """Collect diagnostics and upload to REM via Gateway."""

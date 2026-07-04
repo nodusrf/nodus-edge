@@ -763,7 +763,7 @@ def ask_repeaters(args, lat: float, lon: float, state_name: str,
                 info(f"Trimmed to {len(core_hz)} core frequencies within SDR bandwidth.")
             elif choice == "2":
                 info("Multi-dongle: configure the second dongle in .env after setup.")
-                info("Set RECEPT_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
+                info("Set NODUS_EDGE_FM_AIRBAND_CENTER_FREQ_HZ to optimize placement.")
 
     if not args.non_interactive:
         print()
@@ -1609,6 +1609,7 @@ def main():
         except HTTPError as e:
             if e.code == 409:
                 info("Node already enrolled")
+                info("Your existing device token is preserved from the previous install.")
             else:
                 warn(f"REM enrollment failed (HTTP {e.code}). Node will enroll on first check-in.")
         except Exception:

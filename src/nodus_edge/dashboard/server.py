@@ -32,7 +32,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 # Track the compose file version baked into this image.
 # Bump when the canonical docker-compose.yml changes.
-COMPOSE_VERSION = "2"
+COMPOSE_VERSION = "3"
 
 # Module-level references set by start_dashboard()
 _store: Optional[SegmentStore] = None
@@ -737,6 +737,17 @@ def create_app() -> FastAPI:
         """Translate dashboard tags to support-agent router tags."""
         return list(dict.fromkeys(_TAG_MAP.get(t, t) for t in tags))
 
+    def _rem_auth_header() -> str:
+        """Return the best available REM credential.
+
+        Prefer the live compliance JWT from the check-in client; fall back to
+        an explicit admin key env var for operator-managed installs.
+        """
+        if _rem_checkin and _rem_checkin.compliance_token:
+            return f"Bearer {_rem_checkin.compliance_token}"
+        fallback = os.environ.get("NODUS_EDGE_REM_ADMIN_KEY", "")
+        return f"Bearer {fallback}" if fallback else ""
+
     # Support session state (in-memory; resets on container restart)
     _support_state = {
         "active": False,
@@ -831,7 +842,7 @@ def create_app() -> FastAPI:
                     t_resp = await hc.post(
                         f"{rem_url.rstrip('/')}/v1/tunnels/provision",
                         json={"node_id": _node_id, "ttl_seconds": ttl},
-                        headers={"Authorization": f"Bearer {os.environ.get('NODUS_EDGE_REM_ADMIN_KEY', '')}"},
+                        headers={"Authorization": _rem_auth_header()},
                     )
                     if t_resp.status_code == 200:
                         t_data = t_resp.json()
@@ -958,7 +969,7 @@ def create_app() -> FastAPI:
                 async with httpx.AsyncClient(timeout=15.0) as hc:
                     await hc.post(
                         f"{rem_url.rstrip('/')}/v1/tunnels/{_node_id}/teardown",
-                        headers={"Authorization": f"Bearer {os.environ.get('NODUS_EDGE_REM_ADMIN_KEY', '')}"},
+                        headers={"Authorization": _rem_auth_header()},
                     )
             except Exception as e:
                 logger.warning("tunnel_teardown_error", error=str(e))
@@ -1175,13 +1186,12 @@ def create_app() -> FastAPI:
 
     async def _teardown_tunnel_async(rem_url: str, node_id: str):
         """Async helper: call REM tunnel teardown endpoint."""
-        import os
         try:
             import httpx
             async with httpx.AsyncClient(timeout=15.0) as hc:
                 await hc.post(
                     f"{rem_url.rstrip('/')}/v1/tunnels/{node_id}/teardown",
-                    headers={"Authorization": f"Bearer {os.environ.get('NODUS_EDGE_REM_ADMIN_KEY', '')}"},
+                    headers={"Authorization": _rem_auth_header()},
                 )
         except Exception as e:
             logger.warning("tunnel_teardown_async_error", error=str(e))

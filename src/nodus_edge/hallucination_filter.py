@@ -29,6 +29,82 @@ from .config import settings
 
 # --- Structural check patterns (deterministic, not heuristic) ---
 
+# Short noise phrases Whisper generates from silence/noise.
+# These are structurally impossible as standalone radio transmissions.
+# A real radio transmission always contains information beyond a single
+# pleasantry. Checked against the full cleaned text (case-insensitive,
+# punctuation stripped).
+_NOISE_PHRASES = frozenset({
+    # Single-word impossibilities
+    "thank you",
+    "thanks",
+    "youre welcome",
+    "bye",
+    "bye bye",
+    "goodbye",
+    "hello",
+    "okay",
+    "ok",
+    "yes",
+    "no",
+    "yeah",
+    "so",
+    "hmm",
+    "oh",
+    "ah",
+    "ugh",
+    "huh",
+    "what",
+    "right",
+    "sorry",
+    "im sorry",
+    "silence",
+    "music",
+    "applause",
+    "laughter",
+    "beep",
+    "beep beep",
+    "boop",
+    "bell rings",
+    "bell ring",
+    "phone rings",
+    "phone ringing",
+    "ding dong",
+    "the end",
+    "you",
+    # YouTube signoffs — Whisper's highest-confidence hallucinations.
+    # These bypass the quality gate because Whisper is certain about them.
+    "thank you for watching",
+    "thanks for watching",
+    "thank you for listening",
+    "thanks for listening",
+    "ill see you next time",
+    "well see you next time",
+    "well be right back",
+    "well be back",
+    "see you next time",
+    "see you in the next video",
+    "see you in the next one",
+    "please subscribe",
+    "like and subscribe",
+    "subscribe",
+    "dont forget to subscribe",
+    "welcome back to my channel",
+    "hello everyone welcome back to my channel",
+    "hello everyone welcome back",
+    "hello welcome back to my channel",
+    "welcome back",
+    "hello everyone",
+    "hello everybody",
+    "hey guys",
+    "hi everyone",
+    "stay tuned",
+    # Subtitle / transcription service artifacts
+    "transcription by castingwords",
+    "transcribed by eso",
+    "closed captions by gettranscribedcom",
+})
+
 # Pure punctuation / whitespace
 _JUNK_PATTERN = re.compile(r"^[\s\W]+$")
 
@@ -59,6 +135,11 @@ _FABRICATED_MARKERS = [
     "subtitles by the amara",
     "translated by",
     "captions by",
+    "transcription by",
+    "castingwords",
+    "transcribed by eso",
+    "gettranscribedcom",
+    "beadaholique",
 ]
 
 
@@ -141,8 +222,13 @@ def _check_structural(
     if _FOREIGN_PATTERN.search(stripped):
         return "foreign_chars"
 
+    # Short noise phrases — structurally impossible as standalone radio.
+    # A single "Thank you." or "Bye." is Whisper decoding silence/noise.
+    if cleaned in _NOISE_PHRASES:
+        return "noise_phrase"
+
     # Fabricated content markers (stable YouTube training-data artifacts)
-    if len(cleaned) > 30:
+    if len(cleaned) > 15:
         for marker in _FABRICATED_MARKERS:
             if marker in cleaned:
                 return "fabricated_content"
@@ -507,9 +593,14 @@ WHISPER_HALLUCINATIONS: Set[str] = {
     "birds",
     # CW / courtesy tone artifacts
     "beep",
-    "boop",
     "beep beep",
+    "boop",
     "boop boop",
+    "bell rings",
+    "bell ring",
+    "phone rings",
+    "phone ringing",
+    "ding dong",
     # Additional signoffs / greetings Whisper fabricates
     "well see you next time",
     "well see you in the next video",
@@ -574,7 +665,8 @@ def _legacy_hallucination_check(text: str) -> Tuple[bool, str]:
                 return True, "sentence_repetition"
 
     # Tone words
-    _TONE_WORDS = {"beep", "boop", "beeps", "boops", "ding", "dong", "bip", "bop"}
+    _TONE_WORDS = {"beep", "beeps", "boop", "boops", "ding", "dong", "bip", "bop",
+                    "ring", "rings", "ringing", "bell", "phone"}
     words = cleaned.split()
     if len(words) >= 3:
         tone_count = sum(1 for w in words if w in _TONE_WORDS)

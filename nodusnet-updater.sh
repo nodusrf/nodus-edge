@@ -53,9 +53,14 @@ if [ -z "${NODUSNET_TOKEN:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
 fi
 NODUSNET_TOKEN="${NODUSNET_TOKEN:-}"
 
-# Node ID for status reporting
+# Node ID for status reporting. Current .env uses NODUS_EDGE_NODE_ID;
+# fall back to the legacy prefix for nodes that have not migrated yet.
+# (String split keeps the sync rewrite from renaming the legacy literal.)
 if [ -z "${EDGE_NODE_ID:-}" ] && [ -f "$INSTALL_DIR/.env" ]; then
     EDGE_NODE_ID="$(grep '^NODUS_EDGE_NODE_ID=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "")"
+    if [ -z "$EDGE_NODE_ID" ]; then
+        EDGE_NODE_ID="$(grep "^REC""EPT_NODE_ID=" "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2 || echo "")"
+    fi
 fi
 EDGE_NODE_ID="${EDGE_NODE_ID:-unknown}"
 
@@ -64,7 +69,7 @@ for arg in "$@"; do
     [ "$arg" = "--force" ] && FORCE=true
 done
 
-UPDATER_VERSION="1"  # Bump when making breaking changes to the updater
+UPDATER_VERSION="2"  # Bump when making breaking changes to the updater
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -109,16 +114,25 @@ report_status() {
     [ -z "$NODUSNET_SERVER" ] && return 0
     [ -z "$NODUSNET_TOKEN" ] && return 0
 
+    # Field names must match Gateway UpdateStatusRequest (nodus_edge_tag).
+    # Values pass through the environment so quotes in error text can't
+    # break the JSON.
     local body
-    body=$(python3 -c "
-import json
+    body=$(RS_NODE_ID="$EDGE_NODE_ID" \
+           RS_UPDATER_VERSION="$UPDATER_VERSION" \
+           RS_EDGE_TAG="${NEW_EDGE_TAG:-unknown}" \
+           RS_WHISPER_TAG="${NEW_WHISPER_TAG:-unknown}" \
+           RS_STATUS="$status" \
+           RS_ERROR="$error" \
+           python3 -c "
+import json, os
 print(json.dumps({
-    'node_id': '$EDGE_NODE_ID',
-    'updater_version': '$UPDATER_VERSION',
-    'recept_fm_tag': '${NEW_EDGE_TAG:-unknown}',
-    'whisper_tag': '${NEW_WHISPER_TAG:-unknown}',
-    'status': '$status',
-    'error': '$error'
+    'node_id': os.environ['RS_NODE_ID'],
+    'updater_version': os.environ['RS_UPDATER_VERSION'],
+    'nodus_edge_tag': os.environ['RS_EDGE_TAG'],
+    'whisper_tag': os.environ['RS_WHISPER_TAG'],
+    'status': os.environ['RS_STATUS'],
+    'error': os.environ['RS_ERROR'],
 }))
 " 2>/dev/null) || return 0
 
@@ -314,6 +328,19 @@ fi
 
 log "New images downloaded. Old containers still serving."
 
+# Write image digest to .env for REM compliance check-in. Prefer the
+# manifest digest; fall back to the pulled image's RepoDigest so the
+# check-in still carries a verifiable digest when the manifest omits it.
+if [ -z "$NEW_EDGE_DIGEST" ]; then
+    EDGE_IMAGE_NAME="$(json_get "$MANIFEST_TMP" ".images.nodus-edge.image")"
+    NEW_EDGE_DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${EDGE_IMAGE_NAME}:${NEW_EDGE_TAG}" 2>/dev/null | cut -d@ -f2 || echo "")"
+fi
+if [ -n "$NEW_EDGE_DIGEST" ]; then
+    sed -i '/^NODUS_IMAGE_DIGEST=/d' "$INSTALL_DIR/.env"
+    echo "NODUS_IMAGE_DIGEST=$NEW_EDGE_DIGEST" >> "$INSTALL_DIR/.env"
+    log "Image digest written to .env: ${NEW_EDGE_DIGEST:0:24}..."
+fi
+
 # ---------------------------------------------------------------------------
 # Step 7: Canary pre-flight — validate new images before swap
 # ---------------------------------------------------------------------------
@@ -340,12 +367,18 @@ WHISPER_IMAGE="$(json_get "$MANIFEST_TMP" ".images.whisper-cpu.image"):$NEW_WHIS
 
 log "Canary pre-flight: testing $EDGE_IMAGE"
 
-# Start canary nodus-edge — no USB, alternate port, just verify it boots
+# Start canary nodus-edge — no USB, alternate port, just verify it boots.
+# NODUS_EDGE_CANARY_MODE (1.0.11+) boots the health server only, with no
+# REM check-in and no Synapse publish — canaries must never enroll or
+# ingest. The frequency list lets pre-1.0.11 images (which lack canary
+# mode and crash on an empty frequency config) reach their health server
+# during a rollback. No .env is passed, so canaries have no server URLs.
 docker run -d --rm \
     --name "$CANARY_EDGE" \
     -p "127.0.0.1:${CANARY_EDGE_PORT}:8082" \
     -e NODUS_EDGE_MODE=fm \
-    -e NODUS_EDGE_DRY_RUN=true \
+    -e NODUS_EDGE_CANARY_MODE=true \
+    -e NODUS_EDGE_FM_CORE_FREQUENCIES='[146520000]' \
     "$EDGE_IMAGE" 2>>"$LOG_FILE" || true
 
 # Start canary whisper — alternate port, verify model loads

@@ -348,6 +348,54 @@ body {
     border-radius: 4px;
 }
 
+/* APRS packet cards */
+.segment-card.aprs {
+    border-left: 3px solid #0ea5e9;
+}
+.aprs-badge {
+    background: #0ea5e9 !important;
+    color: #fff !important;
+    padding: 1px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 11px;
+}
+.aprs-path-line {
+    font-size: 13px;
+    font-family: monospace;
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+}
+.aprs-from {
+    color: var(--callsign);
+    font-weight: 600;
+}
+.aprs-path {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.aprs-pos, .aprs-wx, .aprs-msg {
+    font-size: 13px;
+    color: var(--text-primary);
+}
+.aprs-wx {
+    color: #f59e0b;
+}
+.aprs-msg {
+    color: #10b981;
+}
+.aprs-comment {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.aprs-raw {
+    font-size: 12px;
+    font-family: monospace;
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
 .empty-state {
     text-align: center;
     padding: 60px 20px;

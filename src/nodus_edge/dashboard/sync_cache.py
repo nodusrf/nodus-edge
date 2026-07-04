@@ -34,11 +34,13 @@ class SyncCache:
         cache_dir: Optional[Path] = None,
         gateway_url: Optional[str] = None,
         auth_token: Optional[str] = None,
+        get_token=None,
         bundled_repeaters_path: Optional[Path] = None,
     ):
         self.cache_dir = cache_dir or DEFAULT_CACHE_DIR
         self.gateway_url = gateway_url
         self.auth_token = auth_token
+        self._get_token = get_token
         self.bundled_repeaters_path = bundled_repeaters_path
 
         self._repeaters: List[Dict[str, Any]] = []
@@ -116,8 +118,9 @@ class SyncCache:
 
         results = {"repeaters": False, "nets": False}
         headers = {}
-        if self.auth_token:
-            headers["Authorization"] = f"Bearer {self.auth_token}"
+        token = (self._get_token() if self._get_token else None) or self.auth_token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
 
         try:
             with httpx.Client(timeout=15.0) as client:

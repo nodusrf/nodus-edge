@@ -139,14 +139,7 @@
 
     // ========== Live Feed ==========
 
-    function addSegmentToFeed(seg) {
-        const feedList = document.getElementById('feed-list');
-        const empty = document.getElementById('feed-empty');
-        if (empty) empty.remove();
-
-        const card = document.createElement('div');
-        card.className = 'segment-card new';
-
+    function renderVoiceCard(card, seg) {
         const rfChannel = seg.rf_channel || {};
         const freqHz = rfChannel.frequency_hz || 0;
         const freqMhz = (freqHz / 1000000).toFixed(3);
@@ -159,60 +152,126 @@
         const signalType = seg.signal_type || '';
         const timestamp = formatTime(seg.timestamp);
 
-        // Header
-        let headerHtml = `
-            <span class="segment-time">${timestamp}</span>
-            <span class="segment-freq">${freqMhz} MHz</span>
-        `;
-        if (repeater) {
-            headerHtml += `<span class="segment-repeater">${repeater}</span>`;
-        }
-        if (signalType) {
-            headerHtml += `<span class="segment-signal-type">${signalType}</span>`;
-        }
-        if (duration) {
-            headerHtml += `<span class="segment-duration">${duration.toFixed(1)}s</span>`;
-        }
+        var headerHtml = '<span class="segment-time">' + timestamp + '</span>'
+            + '<span class="segment-freq">' + freqMhz + ' MHz</span>';
+        if (repeater) headerHtml += '<span class="segment-repeater">' + escapeHtml(repeater) + '</span>';
+        if (signalType) headerHtml += '<span class="segment-signal-type">' + escapeHtml(signalType) + '</span>';
+        if (duration) headerHtml += '<span class="segment-duration">' + duration.toFixed(1) + 's</span>';
 
-        // Text
-        let textHtml;
-        if (text) {
-            textHtml = highlightCallsigns(text, callsigns);
-        } else {
-            textHtml = '<span class="segment-text audio-only">[Audio only]</span>';
-        }
+        var textHtml = text
+            ? highlightCallsigns(text, callsigns)
+            : '<span class="audio-only">[Audio only]</span>';
 
-        // Footer
-        let footerHtml = '';
-        const hasAudio = !!audioBase64;
+        var footerHtml = '';
+        var hasAudio = !!audioBase64;
         if (hasAudio) {
-            const btnId = 'play-' + (seg.segment_id || Math.random().toString(36).slice(2));
-            footerHtml += `<button class="play-btn" id="${btnId}" data-audio="${audioBase64}">&#9654; Play</button>`;
+            var btnId = 'play-' + (seg.segment_id || Math.random().toString(36).slice(2));
+            footerHtml += '<button class="play-btn" id="' + btnId + '" data-audio="' + audioBase64 + '">&#9654; Play</button>';
             footerHtml += '<span class="speed-slot"></span>';
         }
         if (callsigns.length > 0) {
             footerHtml += '<div class="callsign-list">';
-            callsigns.forEach(cs => {
-                footerHtml += `<span class="callsign-tag">${escapeHtml(cs)}</span>`;
+            callsigns.forEach(function(cs) {
+                footerHtml += '<span class="callsign-tag">' + escapeHtml(cs) + '</span>';
             });
             footerHtml += '</div>';
         }
 
-        card.innerHTML = `
-            <div class="segment-header">${headerHtml}</div>
-            <div class="segment-text">${text ? textHtml : '<span class="audio-only">[Audio only]</span>'}</div>
-            <div class="segment-footer">${footerHtml}</div>
-        `;
+        card.innerHTML = '<div class="segment-header">' + headerHtml + '</div>'
+            + '<div class="segment-text">' + textHtml + '</div>'
+            + '<div class="segment-footer">' + footerHtml + '</div>';
 
-        feedList.insertBefore(card, feedList.firstChild);
-
-        // Attach play handler + speed selector
         if (hasAudio) {
             card.querySelector('.play-btn').addEventListener('click', function () {
                 playAudio(this, audioBase64);
             });
-            const slot = card.querySelector('.speed-slot');
+            var slot = card.querySelector('.speed-slot');
             if (slot) slot.appendChild(buildSpeedSelect());
+        }
+    }
+
+    function renderAprsCard(card, seg) {
+        card.classList.add('aprs');
+        var timestamp = formatTime(seg.timestamp);
+        var fromCall = seg.from_callsign || 'UNKNOWN';
+        var toCall = seg.to_callsign || '';
+        var pktType = seg.packet_type || 'unknown';
+        var path = (seg.path || []).join(',');
+        var comment = seg.comment || '';
+        var pos = seg.position || null;
+        var wx = seg.weather || null;
+        var msgTo = seg.message_to || '';
+        var msgText = seg.message_text || '';
+
+        // Header: time + APRS badge + packet type
+        var headerHtml = '<span class="segment-time">' + timestamp + '</span>'
+            + '<span class="segment-freq aprs-badge">APRS</span>'
+            + '<span class="segment-signal-type">' + escapeHtml(pktType) + '</span>';
+
+        // Path line
+        var pathLine = '<span class="aprs-from">' + escapeHtml(fromCall) + '</span>'
+            + ' &gt; ' + escapeHtml(toCall);
+        if (path) pathLine += ' <span class="aprs-path">via ' + escapeHtml(path) + '</span>';
+
+        // Body: depends on packet type
+        var bodyHtml = '';
+        if (pktType === 'weather' && wx) {
+            var parts = [];
+            if (wx.temperature_f != null) parts.push(wx.temperature_f + '°F');
+            if (wx.humidity_pct != null) parts.push(wx.humidity_pct + '% RH');
+            if (wx.wind_speed_mph != null) {
+                var windStr = wx.wind_speed_mph + ' mph';
+                if (wx.wind_direction != null) windStr += ' @ ' + wx.wind_direction + '°';
+                parts.push(windStr);
+            }
+            if (wx.wind_gust_mph != null) parts.push('gusts ' + wx.wind_gust_mph + ' mph');
+            if (wx.pressure_mbar != null) parts.push(wx.pressure_mbar + ' mbar');
+            if (wx.rain_1h_inches != null) parts.push(wx.rain_1h_inches + '" rain/1h');
+            bodyHtml = '<span class="aprs-wx">' + parts.join(' &middot; ') + '</span>';
+        } else if (pktType === 'message' && msgText) {
+            bodyHtml = '<span class="aprs-msg">To ' + escapeHtml(msgTo) + ': ' + escapeHtml(msgText) + '</span>';
+        } else if (pos) {
+            var locParts = [pos.latitude.toFixed(4) + ', ' + pos.longitude.toFixed(4)];
+            if (pos.speed_kmh) locParts.push(pos.speed_kmh.toFixed(0) + ' km/h');
+            if (pos.course) locParts.push('hdg ' + pos.course.toFixed(0) + '°');
+            if (pos.altitude_m) locParts.push(pos.altitude_m.toFixed(0) + ' m');
+            bodyHtml = '<span class="aprs-pos">' + locParts.join(' &middot; ') + '</span>';
+        }
+        if (comment && pktType !== 'message') {
+            bodyHtml += (bodyHtml ? '<br>' : '') + '<span class="aprs-comment">' + escapeHtml(comment) + '</span>';
+        }
+        if (!bodyHtml) {
+            bodyHtml = '<span class="aprs-raw">' + escapeHtml((seg.raw_packet || '').substring(0, 120)) + '</span>';
+        }
+
+        // Footer: callsign tag
+        var footerHtml = '<div class="callsign-list">'
+            + '<span class="callsign-tag">' + escapeHtml(fromCall) + '</span>'
+            + '</div>';
+
+        card.innerHTML = '<div class="segment-header">' + headerHtml + '</div>'
+            + '<div class="segment-text aprs-body">'
+            + '<div class="aprs-path-line">' + pathLine + '</div>'
+            + bodyHtml
+            + '</div>'
+            + '<div class="segment-footer">' + footerHtml + '</div>';
+    }
+
+    function addSegmentToFeed(seg) {
+        const feedList = document.getElementById('feed-list');
+        const empty = document.getElementById('feed-empty');
+        if (empty) empty.remove();
+
+        const card = document.createElement('div');
+        card.className = 'segment-card new';
+
+        // APRS packets have a different schema — branch to dedicated renderer
+        if (seg.modality === 'aprs') {
+            renderAprsCard(card, seg);
+            feedList.insertBefore(card, feedList.firstChild);
+        } else {
+            renderVoiceCard(card, seg);
+            feedList.insertBefore(card, feedList.firstChild);
         }
 
         // Cap DOM elements

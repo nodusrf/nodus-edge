@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import time
@@ -45,7 +46,8 @@ from .threading.thread_grouper import ThreadGrouper
 from .threading.keyword_scanner import KeywordScanner
 from .connectivity import ConnectivityProbe
 from .rem_checkin import REMCheckIn
-from .validation import validate_startup_config
+from .validation import validate_startup_config, ValidationWarning
+from . import __version__
 
 
 def configure_logging() -> None:
@@ -111,7 +113,7 @@ class EdgeDaemon:
             self.pipeline = EdgePipeline()
             self.watcher: Optional[SDRTrunkWatcher] = None
             self.tr_watcher: Optional[TRWatcher] = None
-        elif self.mode == "fm":
+        elif self.mode in ("fm", "gmrs"):
             self.pipeline = FMPipeline()
             self.fm_scanner: Optional[FMScanner] = None
         elif self.mode == "hf":
@@ -157,10 +159,11 @@ class EdgeDaemon:
         )
         self.rem_checkin.start()
 
-        # Wire compliance token into Synapse publisher and Whisper client
-        # so auth works even without a static NODUSNET_TOKEN
+        # Wire compliance token into Synapse publisher so segments carry it
         if hasattr(self.pipeline, 'synapse_publisher') and self.pipeline.synapse_publisher:
             self.pipeline.synapse_publisher.rem_checkin = self.rem_checkin
+
+        # Wire compliance token into Whisper client for authenticated transcription
         if hasattr(self.pipeline, 'whisper') and self.pipeline.whisper:
             self.pipeline.whisper.rem_checkin = self.rem_checkin
 
@@ -176,14 +179,127 @@ class EdgeDaemon:
             backfill: Process existing files before watching (P25 mode only)
             once: Process existing files and exit (P25 mode only)
         """
-        if self.mode == "p25":
-            self._start_p25_mode(backfill, once)
-        elif self.mode == "fm":
-            self._start_fm_mode()
-        elif self.mode == "hf":
-            self._start_hf_mode()
-        elif self.mode == "aprs":
-            self._start_aprs_mode()
+        if settings.canary_mode:
+            self._start_canary_mode()
+            return
+
+        try:
+            if self.mode == "p25":
+                self._start_p25_mode(backfill, once)
+            elif self.mode in ("fm", "gmrs"):
+                self._start_fm_mode()
+            elif self.mode == "hf":
+                self._start_hf_mode()
+            elif self.mode == "aprs":
+                self._start_aprs_mode()
+        except Exception as e:
+            # Edge modes stay alive on startup failure. A crash loop is a
+            # dark node; a degraded node reports its reason via /health,
+            # the dashboard, and REM check-ins, and can be fixed remotely.
+            if self.mode in ("fm", "gmrs", "aprs") and not once:
+                self._enter_degraded_mode(str(e))
+            else:
+                raise
+
+    def _start_health_server(self) -> None:
+        """Start the health/audio server. Idempotent; safe before the scanner exists."""
+        if self.health_server is not None:
+            return
+
+        def health_stats():
+            stats = self.pipeline.get_stats() if self.pipeline else {}
+            scanner = getattr(self, "fm_scanner", None)
+            if scanner is not None and hasattr(scanner, "get_capture_stats"):
+                stats["scanner"] = scanner.get_capture_stats()
+            return stats
+
+        self.health_server = HealthServer(
+            port=8082,
+            node_id=settings.node_id,
+            get_stats=health_stats,
+            audio_dir=settings.fm_capture_path,
+            operator_cache=getattr(self.pipeline, "operator_cache", None),
+            audit_log=audit_log,
+            synapse_publisher=getattr(self.pipeline, "synapse_publisher", None),
+            status="starting",
+        )
+        self.health_server.start()
+
+    def _start_canary_mode(self) -> None:
+        """Canary boot for OTA pre-flight: prove the image runs on this host.
+
+        Health server only. No scanner (canary containers have no USB), no
+        REM check-in or Synapse publish (canaries must never enroll or
+        ingest), no dashboard. The updater probes /health, then discards
+        the container.
+        """
+        logger.info(
+            "Starting in canary mode — health server only",
+            node_id=settings.node_id,
+            version=__version__,
+        )
+        self._start_health_server()
+        self.health_server.set_status("canary")
+
+        try:
+            while not self._shutdown_event.is_set():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        self.stop()
+
+    def _enter_degraded_mode(self, reason: str) -> None:
+        """Keep the process alive and observable after a startup failure.
+
+        The health server, dashboard, and REM check-in stay up so the node
+        is visible and fixable (edit .env from the dashboard, restart)
+        instead of crash-looping. No scanner runs, no segments are produced.
+        """
+        logger.error("Startup failed — entering degraded mode", error=reason)
+
+        self._start_health_server()
+        self.health_server.set_status("degraded", startup_error=reason)
+
+        if self.rem_checkin is None:
+            self._start_rem_checkin()
+
+        if settings.dashboard_enabled:
+            try:
+                store = SegmentStore(max_segments=settings.dashboard_max_segments)
+                cache = SyncCache(
+                    gateway_url=settings.synapse_endpoint,
+                    auth_token=settings.synapse_auth_token,
+                    get_token=lambda: self.rem_checkin.compliance_token if self.rem_checkin else None,
+                )
+                start_dashboard(
+                    store=store,
+                    cache=cache,
+                    port=settings.dashboard_port,
+                    node_id=settings.node_id,
+                    health_port=8082,
+                    timezone=settings.timezone,
+                    metro=settings.metro,
+                    dashboard_token=settings.dashboard_token,
+                    channel_frequencies=[],
+                    squelch_snr_db=settings.fm_airband_squelch_snr_db,
+                    env_path=Path("/app/.env"),
+                    startup_warnings=[ValidationWarning(
+                        code="startup_error",
+                        message=reason,
+                        severity="error",
+                    )],
+                    get_pipeline_stats=self.pipeline.get_stats if self.pipeline else None,
+                    rem_checkin=self.rem_checkin,
+                )
+            except Exception as dash_err:
+                logger.warning("Dashboard unavailable in degraded mode", error=str(dash_err))
+
+        try:
+            while not self._shutdown_event.is_set():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        self.stop()
 
     def _start_p25_mode(self, backfill: bool = False, once: bool = False) -> None:
         """Start in P25 mode - dispatch to SDRTrunk or Trunk Recorder path."""
@@ -306,6 +422,11 @@ class EdgeDaemon:
 
     def _start_fm_mode(self) -> None:
         """Start in FM mode (frequency scanning)."""
+        # Health server first: any config error below must leave a reachable
+        # node (degraded mode) rather than a dead container. The scanner is
+        # bound to the running server once it exists.
+        self._start_health_server()
+
         # Resolve frequency list
         all_frequencies = settings.fm_core_frequencies or settings.fm_frequencies
         if not all_frequencies:
@@ -402,6 +523,7 @@ class EdgeDaemon:
                 metro=settings.metro,
                 mode="fm",
                 auth_token=settings.synapse_auth_token,
+                get_token=lambda: self.rem_checkin.compliance_token if self.rem_checkin else None,
             )
             self.coverage_reporter.report(
                 core_frequencies=settings.fm_core_frequencies,
@@ -445,26 +567,11 @@ class EdgeDaemon:
         self.fm_scanner.start()
         logger.info("FM scanner started")
 
-        # Start health + audio server (serves /health, /stats, /audio/{filename})
-        scanner_ref = self.fm_scanner
-
-        def health_stats():
-            stats = self.pipeline.get_stats()
-            if hasattr(scanner_ref, 'get_capture_stats'):
-                stats["scanner"] = scanner_ref.get_capture_stats()
-            return stats
-
-        self.health_server = HealthServer(
-            port=8082,
-            node_id=settings.node_id,
-            get_stats=health_stats,
-            audio_dir=settings.fm_capture_path,
-            operator_cache=getattr(self.pipeline, 'operator_cache', None),
-            audit_log=audit_log,
-            synapse_publisher=self.pipeline.synapse_publisher,
-            scanner=scanner_ref,
-        )
-        self.health_server.start()
+        # Health server started at the top of this function; bind the scanner
+        # now that it exists and mark the node healthy.
+        self.health_server.set_scanner(self.fm_scanner)
+        self.health_server.set_synapse_publisher(self.pipeline.synapse_publisher)
+        self.health_server.set_status("healthy")
 
         # Run startup validation
         repeater_db = self.pipeline._repeater_db
@@ -560,6 +667,7 @@ class EdgeDaemon:
             cache = SyncCache(
                 gateway_url=settings.synapse_endpoint,
                 auth_token=settings.synapse_auth_token,
+                get_token=lambda: self.rem_checkin.compliance_token if self.rem_checkin else None,
                 bundled_repeaters_path=bundled_repeaters,
             )
 
@@ -733,7 +841,7 @@ class EdgeDaemon:
         if self.mode == "p25" and hasattr(self, 'watcher') and self.watcher:
             self.watcher.stop()
         # TR watcher runs in the main thread via run(), stops on KeyboardInterrupt
-        elif self.mode == "fm" and hasattr(self, 'fm_scanner') and self.fm_scanner:
+        elif self.mode in ("fm", "gmrs") and hasattr(self, 'fm_scanner') and self.fm_scanner:
             self.fm_scanner.stop()
         elif self.mode == "hf" and hasattr(self.pipeline, 'stop'):
             self.pipeline.stop()
@@ -887,6 +995,38 @@ class EdgeDaemon:
         logger.info("Processing statistics", **log_kwargs)
 
 
+def _run_bare_degraded(reason: str) -> None:
+    """Last-resort degraded boot when the daemon cannot even construct.
+
+    Health server reports the startup error; REM check-in keeps the node
+    visible to the fleet instead of dark. Runs until signalled. No pipeline,
+    no scanner, no dashboard.
+    """
+    logger.error("Daemon construction failed — bare degraded mode", error=reason)
+
+    health = HealthServer(port=8082, node_id=settings.node_id, status="starting")
+    health.start()
+    health.set_status("degraded", startup_error=reason)
+
+    checkin = None
+    if settings.rem_endpoint:
+        checkin = REMCheckIn(
+            rem_endpoint=settings.rem_endpoint,
+            node_id=settings.node_id,
+            auth_token=settings.synapse_auth_token,
+        )
+        checkin.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    if checkin:
+        checkin.stop()
+    health.stop()
+
+
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -916,9 +1056,9 @@ FM Mode Settings:
 
     parser.add_argument(
         "--mode",
-        choices=["p25", "fm", "hf", "aprs"],
+        choices=["p25", "fm", "gmrs", "hf", "aprs"],
         default=None,
-        help="Radio mode: p25, fm (ham radio), hf, or aprs (packet)",
+        help="Radio mode: p25, fm (ham radio), gmrs (GMRS/FRS), hf, or aprs (packet)",
     )
     parser.add_argument(
         "--backfill",
@@ -954,6 +1094,16 @@ FM Mode Settings:
 
     args = parser.parse_args()
 
+    # Load persistent config overrides from REM config push
+    _config_override_path = "/data/config-overrides.env"
+    if os.path.exists(_config_override_path):
+        with open(_config_override_path) as _f:
+            for _line in _f:
+                _line = _line.strip()
+                if _line and "=" in _line and not _line.startswith("#"):
+                    _k, _v = _line.split("=", 1)
+                    os.environ[_k] = _v
+
     # Apply overrides
     if args.mode:
         settings.mode = args.mode
@@ -969,7 +1119,18 @@ FM Mode Settings:
     configure_logging()
 
     # Set up signal handlers
-    daemon = EdgeDaemon()
+    try:
+        daemon = EdgeDaemon()
+    except Exception as e:
+        # Edge modes: even a constructor failure (corrupt data file, bad
+        # mount) must leave a reachable node, not a crash loop. Canary
+        # boots are excluded on purpose — a broken image must exit nonzero
+        # so the OTA pre-flight rejects it.
+        if settings.mode in ("fm", "gmrs", "aprs") and not settings.canary_mode:
+            _run_bare_degraded(str(e))
+            return
+        logger.error("Daemon failed to construct", error=str(e))
+        sys.exit(1)
 
     def signal_handler(signum, frame):
         logger.info("Received shutdown signal")

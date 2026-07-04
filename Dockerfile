@@ -24,6 +24,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN git clone --depth 1 https://github.com/rtl-airband/RTLSDR-Airband /tmp/rtl-airband \
     && cd /tmp/rtl-airband \
+    && sed -i 's/lame_set_VBR(lame, vbr_mtrh)/lame_set_VBR(lame, vbr_off)/' src/output.cpp \
+    && sed -i 's/lame_set_brate(lame, 16)/lame_set_brate(lame, 48)/' src/output.cpp \
+    && sed -i 's/lame_set_quality(lame, 7)/lame_set_quality(lame, 2)/' src/output.cpp \
     && mkdir build && cd build \
     && cmake -DNFM=1 -DRTLSDR=1 -DPULSEAUDIO=0 -DPLATFORM=generic .. \
     && make -j"$(nproc)"
